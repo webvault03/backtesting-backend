@@ -24,6 +24,9 @@ async function getFlowScalpPrimeTrades(req, res) {
       status: req.query?.status,
       page: req.query?.page,
       pageSize: req.query?.pageSize,
+      date: req.query?.date,
+      month: req.query?.month,
+      year: req.query?.year,
     });
     return res.json({ ok: true, ...data });
   } catch (error) {

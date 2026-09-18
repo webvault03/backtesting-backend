@@ -8,6 +8,7 @@ const LiveWallet = require('../models/liveWallet');
 const { FLOW_SCALP_PRIME_LIVE_KEY } = require('../strategies/keys');
 const { buildSignalFromOiFlow } = require('../strategies/flowScalpPrime/signals');
 const { getIstClock, isWeekendDateKey } = require('../utils/dateTime');
+const { applyEntryDateFilter } = require('../utils/tradeHistoryDateFilter');
 const { round } = require('../utils/oiFlowPlaybook');
 const {
   getAtmPremiums,
@@ -1050,7 +1051,7 @@ async function updateSettings(partial = {}) {
   return { ok: true, settings };
 }
 
-async function listTrades({ status, page = 1, pageSize = 50 } = {}) {
+async function listTrades({ status, page = 1, pageSize = 50, date, month, year } = {}) {
   const q = { strategyKey: STRATEGY_KEY };
   if (status === 'OPEN') {
     q.status = 'OPEN';
@@ -1058,6 +1059,7 @@ async function listTrades({ status, page = 1, pageSize = 50 } = {}) {
   } else if (status === 'CLOSED') {
     q.$or = [{ status: 'CLOSED' }, { exitTime: { $ne: null } }];
   }
+  const dateFilter = applyEntryDateFilter(q, { date, month, year });
   const size = Math.max(1, Math.min(200, Math.floor(Number(pageSize) || 50)));
   const p = Math.max(1, Math.floor(Number(page) || 1));
   const total = await LivePaperTrade.countDocuments(q);
@@ -1068,6 +1070,7 @@ async function listTrades({ status, page = 1, pageSize = 50 } = {}) {
     .lean();
   return {
     trades,
+    filter: dateFilter,
     pagination: {
       page: p,
       pageSize: size,
