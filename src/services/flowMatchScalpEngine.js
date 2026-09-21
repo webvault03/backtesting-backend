@@ -271,7 +271,98 @@ function favorPtsFromTrade(trade) {
   return 0;
 }
 
-/** Day book: option pts (display) + realized ₹ · lock when ₹ target hit. */
+/**
+ * Split closed fills for one IST day into target book vs after-target book.
+ * Walks entryTime ASC. The fill that first pushes running ₹ ≥ day target stays
+ * in the target book; every later fill is after-target (even if untagged).
+ */
+function splitClosedTradesForDay(closedAsc, dayTargetInr) {
+  const targetTrades = [];
+  const afterTrades = [];
+  let running = 0;
+  let hit = false;
+  let hitAt = null;
+  let targetPts = 0;
+  let afterPts = 0;
+
+  for (const t of closedAsc) {
+    const pnl = Number(t.pnl);
+    const safePnl = Number.isFinite(pnl) ? pnl : 0;
+    let pts = favorPtsFromTrade(t);
+    const snap = t.signalSnapshot || {};
+    const reason = String(t.reason || '').toUpperCase();
+    const risk = Number(snap.riskPts);
+    const reward = Number(snap.rewardPts);
+    if (reason === 'STOP_LOSS' && Number.isFinite(risk)) pts = -Math.abs(risk);
+    if (reason === 'TARGET' && Number.isFinite(reward)) pts = Math.abs(reward);
+    if (!Number.isFinite(pts)) pts = 0;
+
+    const forcedAfter = Boolean(t.afterDayTarget) || hit;
+    if (forcedAfter) {
+      afterTrades.push({ ...t, afterDayTarget: true, bookSide: 'after' });
+      afterPts = round(afterPts + pts);
+      hit = true;
+      continue;
+    }
+
+    running += safePnl;
+    targetTrades.push({ ...t, afterDayTarget: false, bookSide: 'target' });
+    targetPts = round(targetPts + pts);
+    if (dayTargetInr > 0 && running >= dayTargetInr) {
+      hit = true;
+      hitAt = t.exitTime || t.entryTime || null;
+    }
+  }
+
+  const targetPnl = Number(
+    targetTrades.reduce((s, t) => s + (Number(t.pnl) || 0), 0).toFixed(2),
+  );
+  const afterPnl = Number(
+    afterTrades.reduce((s, t) => s + (Number(t.pnl) || 0), 0).toFixed(2),
+  );
+  const winsOf = (rows) => rows.filter((t) => Number(t.pnl) > 0).length;
+  const lossesOf = (rows) => rows.filter((t) => Number(t.pnl) < 0).length;
+
+  return {
+    targetTrades,
+    afterTrades,
+    dayTargetHit: hit,
+    dayTargetHitAt: hitAt,
+    targetPnl,
+    afterPnl,
+    targetPts,
+    afterPts,
+    targetWins: winsOf(targetTrades),
+    targetLosses: lossesOf(targetTrades),
+    afterWins: winsOf(afterTrades),
+    afterLosses: lossesOf(afterTrades),
+    dayPnlInr: Number((targetPnl + afterPnl).toFixed(2)),
+    dayPts: round(targetPts + afterPts),
+  };
+}
+
+function summarizeBookRows(rows) {
+  const list = Array.isArray(rows) ? rows : [];
+  let pnl = 0;
+  let wins = 0;
+  let losses = 0;
+  for (const t of list) {
+    const p = Number(t.pnl);
+    if (!Number.isFinite(p)) continue;
+    pnl += p;
+    if (p > 0) wins += 1;
+    else if (p < 0) losses += 1;
+  }
+  return {
+    trades: list.length,
+    pnl: Number(pnl.toFixed(2)),
+    wins,
+    losses,
+    winRate: list.length > 0 ? Math.round((wins / list.length) * 100) : null,
+  };
+}
+
+/** Day book: option pts + realized ₹. Target hit is sticky; entries still allowed until window end. */
 async function refreshDayBook(dateKey) {
   if (engineState.dayPtsDateKey !== dateKey) {
     engineState.dayPtsDateKey = dateKey;
@@ -293,46 +384,44 @@ async function refreshDayBook(dateKey) {
     .sort({ entryTime: 1 })
     .lean();
 
-  let dayPts = 0;
-  let dayPnlInr = 0;
   let lastBar = null;
-
   for (const t of closed) {
     const snap = t.signalSnapshot || {};
     if (Number.isFinite(Number(snap.barMinutes))) lastBar = Number(snap.barMinutes);
-    let pts = favorPtsFromTrade(t);
-    const reason = String(t.reason || '').toUpperCase();
-    const risk = Number(snap.riskPts);
-    const reward = Number(snap.rewardPts);
-    if (reason === 'STOP_LOSS' && Number.isFinite(risk)) pts = -Math.abs(risk);
-    if (reason === 'TARGET' && Number.isFinite(reward)) pts = Math.abs(reward);
-    dayPts = round(dayPts + pts);
-    const pnl = Number(t.pnl);
-    if (Number.isFinite(pnl)) dayPnlInr += pnl;
   }
 
-  dayPnlInr = Number(dayPnlInr.toFixed(2));
   const dayTargetInr = scaledDailyTargetInr();
-  let dayLocked = false;
-  let dayStopReason = null;
-  if (dayTargetInr > 0 && dayPnlInr >= dayTargetInr) {
-    dayLocked = true;
-    dayStopReason = `Day target ₹${dayTargetInr} hit (₹${dayPnlInr})`;
-  }
+  const split = splitClosedTradesForDay(closed, dayTargetInr);
+  const dayLocked = Boolean(split.dayTargetHit);
+  const dayStopReason = dayLocked
+    ? `Day target ₹${dayTargetInr} hit (target book ₹${split.targetPnl}) · still trading until window end`
+    : null;
 
-  engineState.dayPts = dayPts;
-  engineState.dayPnlInr = dayPnlInr;
+  engineState.dayPts = split.dayPts;
+  engineState.dayPnlInr = split.dayPnlInr;
   engineState.dayLocked = dayLocked;
   engineState.dayStopReason = dayStopReason;
   engineState.dayTargetInr = dayTargetInr;
   engineState.lastEntryBarMinutes = lastBar;
   return {
-    dayPts,
-    dayPnlInr,
+    dayPts: split.dayPts,
+    dayPnlInr: split.dayPnlInr,
     dayTargetInr,
     dayLocked,
+    dayTargetHit: dayLocked,
+    dayTargetHitAt: split.dayTargetHitAt,
     dayStopReason,
     lastEntryBarMinutes: lastBar,
+    targetPnl: split.targetPnl,
+    afterPnl: split.afterPnl,
+    targetPts: split.targetPts,
+    afterPts: split.afterPts,
+    targetTrades: split.targetTrades.length,
+    afterTrades: split.afterTrades.length,
+    targetWins: split.targetWins,
+    targetLosses: split.targetLosses,
+    afterWins: split.afterWins,
+    afterLosses: split.afterLosses,
   };
 }
 
@@ -615,15 +704,7 @@ async function tryEnter(signal, tape) {
 
   const clock = getIstClock(new Date());
   const dayBook = await refreshDayBook(clock.dateKey);
-  if (dayBook.dayLocked) {
-    engineState.lastEntryDebug = {
-      skip: 'day_target',
-      dayPnlInr: dayBook.dayPnlInr,
-      dayTargetInr: dayBook.dayTargetInr,
-      reason: dayBook.dayStopReason,
-    };
-    return;
-  }
+  // Day ₹ target is a bookmark only — keep entering until trade window ends (14:30).
 
   if (engineState.lastStopLossAtMs > 0) {
     const sinceSlMs = Date.now() - engineState.lastStopLossAtMs;
@@ -766,6 +847,7 @@ async function tryEnter(signal, tape) {
     const tpPts = Math.max(1, Number(signal.rewardPts) || Number(engineState.settings.optionTpPts) || 2);
     const stopLossPremium = Number((entryPremium - slPts).toFixed(2));
     const targetPremium = Number((entryPremium + tpPts).toFixed(2));
+    const afterDayTarget = Boolean(dayBook.dayTargetHit || dayBook.dayLocked);
 
     const tradeDoc = await LivePaperTrade.create({
       strategyKey: STRATEGY_KEY,
@@ -792,9 +874,10 @@ async function tryEnter(signal, tape) {
       targetMode: 'POINTS',
       combinedStopSpot: null,
       targetSpot: null,
+      afterDayTarget,
       legs: [{ optionType, entryPremium: Number(entryPremium.toFixed(2)) }],
-      entryReason: `Flow Match · ${signal.strength || signal.flowBias || ''} ${signal.act || ''} → ${optionType} · 3m ${signal.flowTime || signal.barTime || ''}`,
-      notes: `flow_match_scalp; strength=${signal.strength}; act=${signal.act}; bias=${signal.flowBias}; pattern=${signal.patternId}; optionSL=${slPts}; optionTP=${tpPts}; entrySrc=${entrySource}; candle=${candle.note}`,
+      entryReason: `Flow Match · ${signal.strength || signal.flowBias || ''} ${signal.act || ''} → ${optionType} · 3m ${signal.flowTime || signal.barTime || ''}${afterDayTarget ? ' · after day ₹' : ''}`,
+      notes: `flow_match_scalp; strength=${signal.strength}; act=${signal.act}; bias=${signal.flowBias}; pattern=${signal.patternId}; optionSL=${slPts}; optionTP=${tpPts}; entrySrc=${entrySource}; candle=${candle.note}; afterDayTarget=${afterDayTarget ? 1 : 0}`,
       signalSnapshot: {
         patternId: signal.patternId,
         patternName: signal.patternName,
@@ -816,6 +899,7 @@ async function tryEnter(signal, tape) {
         targetPremium,
         strikeCandleOk: true,
         strikeCandleNote: candle.note,
+        afterDayTarget,
       },
     });
 
@@ -833,6 +917,7 @@ async function tryEnter(signal, tape) {
       entrySource,
       targetPremium,
       stopLossPremium,
+      afterDayTarget,
       strikeCandle: candle,
       signalStatus: signal.status,
     };
@@ -870,13 +955,12 @@ async function tickOnce() {
       clockMinutes: clock.minutes,
     });
 
+    // Target hit is informational only — do not block buys. Continue until tradeToTime.
     if (dayBook.dayLocked) {
-      signal.status = 'DONE';
-      signal.buyLive = false;
-      signal.entryBlocked = true;
-      signal.headline = 'Day target done';
-      signal.detail = dayBook.dayStopReason || 'Day ₹ target hit — no more entries';
-      signal.why = `Today ₹${dayBook.dayPnlInr} ≥ target ₹${dayBook.dayTargetInr} · wait until next session`;
+      signal.dayTargetHit = true;
+      signal.dayLocked = true;
+      if (!signal.headline) signal.headline = 'Day ₹ done · still trading';
+      signal.why = `${dayBook.dayStopReason || 'Day ₹ target hit'} · entries continue until ${engineState.settings.tradeToTime || '14:30'}`;
     }
 
     // Green strike candle filter (soft-fail: keep TAKE_ENTRY visible, clear buyLive)
@@ -887,8 +971,7 @@ async function tickOnce() {
       note: 'Candle not checked',
     };
     if (
-      !dayBook.dayLocked
-      && signal?.optionType
+      signal?.optionType
       && (signal.status === 'TAKE_ENTRY' || signal.status === 'NEAR')
     ) {
       const optionType = signal.optionType === 'PE' ? 'PE' : 'CE';
@@ -947,12 +1030,15 @@ async function tickOnce() {
       dayPnlInr: dayBook.dayPnlInr,
       dayTargetInr: dayBook.dayTargetInr,
       dayLocked: dayBook.dayLocked,
+      dayTargetHit: dayBook.dayTargetHit,
       dayStopReason: dayBook.dayStopReason,
+      targetPnl: dayBook.targetPnl,
+      afterPnl: dayBook.afterPnl,
     };
 
     await checkOpenTrade(signal, tape);
-    // Immediate re-entry allowed after exit (including same tick) unless day-locked / SL cooldown.
-    if (!engineState.openTradeId && !dayBook.dayLocked) {
+    // Immediate re-entry allowed after exit (including same tick) unless SL cooldown / outside window.
+    if (!engineState.openTradeId) {
       await tryEnter(signal, tape);
     }
     engineState.lastError = null;
@@ -1071,7 +1157,7 @@ async function updateSettings(partial = {}) {
   return { ok: true, settings };
 }
 
-async function listTrades({ status, page = 1, pageSize = 50, date, month, year } = {}) {
+async function listTrades({ status, page = 1, pageSize = 50, date, month, year, split } = {}) {
   const q = { strategyKey: STRATEGY_KEY };
   if (status === 'OPEN') {
     q.status = 'OPEN';
@@ -1080,6 +1166,83 @@ async function listTrades({ status, page = 1, pageSize = 50, date, month, year }
     q.$or = [{ status: 'CLOSED' }, { exitTime: { $ne: null } }];
   }
   const dateFilter = applyEntryDateFilter(q, { date, month, year });
+  const wantSplit = split === true || split === 1 || String(split || '').toLowerCase() === '1' || String(split || '').toLowerCase() === 'true';
+
+  if (wantSplit && status !== 'OPEN') {
+    const closedQ = { strategyKey: STRATEGY_KEY, isTesting: { $ne: true } };
+    closedQ.$or = [{ status: 'CLOSED' }, { exitTime: { $ne: null } }];
+    const dateFilterSplit = applyEntryDateFilter(closedQ, { date, month, year });
+    const allAsc = await LivePaperTrade.find(closedQ)
+      .sort({ entryTime: 1 })
+      .limit(500)
+      .lean();
+
+    const dayTargetInr = scaledDailyTargetInr();
+    const byDay = new Map();
+    for (const t of allAsc) {
+      const key = t.entryDateKey || 'unknown';
+      if (!byDay.has(key)) byDay.set(key, []);
+      byDay.get(key).push(t);
+    }
+
+    const targetTrades = [];
+    const afterTrades = [];
+    let targetPnl = 0;
+    let afterPnl = 0;
+    let targetWins = 0;
+    let targetLosses = 0;
+    let afterWins = 0;
+    let afterLosses = 0;
+    let anyHit = false;
+
+    for (const [, dayRows] of [...byDay.entries()].sort((a, b) => a[0].localeCompare(b[0]))) {
+      const splitDay = splitClosedTradesForDay(dayRows, dayTargetInr);
+      if (splitDay.dayTargetHit) anyHit = true;
+      targetTrades.push(...splitDay.targetTrades);
+      afterTrades.push(...splitDay.afterTrades);
+      targetPnl += splitDay.targetPnl;
+      afterPnl += splitDay.afterPnl;
+      targetWins += splitDay.targetWins;
+      targetLosses += splitDay.targetLosses;
+      afterWins += splitDay.afterWins;
+      afterLosses += splitDay.afterLosses;
+    }
+
+    const newestFirst = (a, b) => new Date(b.entryTime) - new Date(a.entryTime);
+    targetTrades.sort(newestFirst);
+    afterTrades.sort(newestFirst);
+
+    return {
+      filter: dateFilterSplit,
+      dayTargetInr,
+      dayTargetHit: anyHit,
+      split: true,
+      targetBook: {
+        trades: targetTrades.length,
+        pnl: Number(targetPnl.toFixed(2)),
+        wins: targetWins,
+        losses: targetLosses,
+        winRate:
+          targetTrades.length > 0 ? Math.round((targetWins / targetTrades.length) * 100) : null,
+        rows: targetTrades,
+      },
+      afterBook: {
+        trades: afterTrades.length,
+        pnl: Number(afterPnl.toFixed(2)),
+        wins: afterWins,
+        losses: afterLosses,
+        winRate: afterTrades.length > 0 ? Math.round((afterWins / afterTrades.length) * 100) : null,
+        rows: afterTrades,
+      },
+      pagination: {
+        page: 1,
+        pageSize: allAsc.length,
+        totalRows: allAsc.length,
+        totalPages: 1,
+      },
+    };
+  }
+
   const size = Math.max(1, Math.min(200, Math.floor(Number(pageSize) || 50)));
   const p = Math.max(1, Math.floor(Number(page) || 1));
   const total = await LivePaperTrade.countDocuments(q);
@@ -1157,7 +1320,23 @@ async function getBookSummary() {
     dayPnlInr: dayBook.dayPnlInr,
     dayTargetInr: dayBook.dayTargetInr,
     dayLocked: dayBook.dayLocked,
+    dayTargetHit: dayBook.dayTargetHit,
+    dayTargetHitAt: dayBook.dayTargetHitAt,
     dayStopReason: dayBook.dayStopReason,
+    targetBook: {
+      trades: dayBook.targetTrades,
+      pnl: dayBook.targetPnl,
+      pts: dayBook.targetPts,
+      wins: dayBook.targetWins,
+      losses: dayBook.targetLosses,
+    },
+    afterBook: {
+      trades: dayBook.afterTrades,
+      pnl: dayBook.afterPnl,
+      pts: dayBook.afterPts,
+      wins: dayBook.afterWins,
+      losses: dayBook.afterLosses,
+    },
     lastError: engineState.lastError,
   };
 }

@@ -36,6 +36,7 @@ async function getFlowMatchScalpTrades(req, res) {
       date: req.query?.date,
       month: req.query?.month,
       year: req.query?.year,
+      split: req.query?.split,
     });
     return res.json({ ok: true, ...data });
   } catch (error) {
