@@ -40,13 +40,6 @@ async function bootBackgroundServices() {
   }
 
   try {
-    const manualOiAuto = require('./services/manualOiAutoEngine');
-    await manualOiAuto.ensureEngineRunning();
-  } catch (err) {
-    console.warn('Manual OI auto engine boot:', err.message);
-  }
-
-  try {
     const flowScalpPrime = require('./services/flowScalpPrimeEngine');
     await flowScalpPrime.ensureEngineRunning();
   } catch (err) {

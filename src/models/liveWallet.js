@@ -67,21 +67,6 @@ const liveWalletSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.Mixed,
       default: null,
     },
-    /** Manual Console OI auto-signal scalp (separate from manual wallet). */
-    manualOiAutoEngineSettings: {
-      enabled: { type: Boolean, default: true },
-      symbol: { type: String, default: 'NIFTY' },
-      lotCount: { type: Number, default: 10 },
-      tradeFromTime: { type: String, default: '09:30' },
-      tradeToTime: { type: String, default: '13:00' },
-      eodExitTime: { type: String, default: '15:15' },
-      targetPoints: { type: Number, default: 5 },
-      stopLossPoints: { type: Number, default: 15 },
-      proximityPoints: { type: Number, default: 20 },
-      minOiRatio: { type: Number, default: 1.2 },
-      cooldownSeconds: { type: Number, default: 60 },
-      perTradeCost: { type: Number, default: 100 },
-    },
     /** OI Flow Tracker paper (Put writing→CALL / Put buying→PUT). */
     oiFlowEngineSettings: {
       enabled: { type: Boolean, default: true },

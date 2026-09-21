@@ -107,7 +107,7 @@ function analyticsFromStrikes(strikes, prev) {
   };
 }
 
-/** ΔOI wall bias for one strike (same rules as OI Wall Scalp). */
+/** ΔOI wall bias for one strike. */
 function biasFromStrikeRow(row, minOiRatio = 1.2) {
   if (!row || !Number.isFinite(Number(row.strike))) return null;
   const putChg = Number(row.putChgOi);

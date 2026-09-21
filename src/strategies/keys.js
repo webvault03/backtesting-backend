@@ -10,8 +10,6 @@ const STRATEGY_FOURTEEN_EOD_OI_WALLS_LIVE_KEY = 'strategy14_eod_oi_walls_live';
 const MANUAL_CONSOLE_LIVE_KEY = 'manual_console_live';
 /** Stock F&O manual trade desk (no day-close; separate wallet/book). */
 const MANUAL_STOCK_LIVE_KEY = 'manual_stock_live';
-/** OI Wall Scalp paper — auto scalp (separate wallet/book). */
-const MANUAL_OI_AUTO_LIVE_KEY = 'manual_oi_auto_live';
 /** OI Flow Tracker signal store key (paper auto-trade removed). */
 const OI_FLOW_TRACKER_LIVE_KEY = 'oi_flow_tracker_live';
 /** Flow Scalp Prime — live Bias scalp · +2/−3 · 15m after SL · day ₹ target default off. */
@@ -26,7 +24,6 @@ module.exports = {
   STRATEGY_FOURTEEN_EOD_OI_WALLS_LIVE_KEY,
   MANUAL_CONSOLE_LIVE_KEY,
   MANUAL_STOCK_LIVE_KEY,
-  MANUAL_OI_AUTO_LIVE_KEY,
   OI_FLOW_TRACKER_LIVE_KEY,
   FLOW_SCALP_PRIME_LIVE_KEY,
   FLOW_MATCH_SCALP_LIVE_KEY,
