@@ -64,6 +64,12 @@ const livePaperTradeSchema = new mongoose.Schema(
      * (continuation book). Kept for historical trade documents.
      */
     afterDayTarget: { type: Boolean, default: false, index: true },
+    /**
+     * Multi-target ladder (Open OI Walls): one entry, many milestone hits.
+     * Each item: { points, premium, status: PENDING|HIT|MISSED, hitAt, hitPremium, pnlAtHit }.
+     * Position stays open until day close — targets do not close the trade.
+     */
+    targetMilestones: { type: [mongoose.Schema.Types.Mixed], default: undefined },
   },
   { timestamps: true }
 );

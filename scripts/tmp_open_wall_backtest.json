@@ -1,0 +1,218 @@
+{
+  "summary": {
+    "assumption": "Target = +15 spot pts in option direction (archives lack option LTP). Walls: archive topPut/topCall at first morning minute; 2026-09-28 uses absolute OI strikes when available. Touch = spot within 10 pts of wall. Entry window 09:15–10:30. One trade/day. Put wall→CE, Call wall→PE.",
+    "days": 13,
+    "daysWithTrade": 6,
+    "daysNoTrade": 7,
+    "skipped": [],
+    "targetHits": 6,
+    "noTarget": 0,
+    "hitRatePct": 100,
+    "ceTrades": 2,
+    "peTrades": 4,
+    "avgHoldMinsOnHit": 51.3
+  },
+  "results": [
+    {
+      "dateKey": "2026-09-09",
+      "openTime": "10:21",
+      "openSpot": 23523.5,
+      "putWall": 0,
+      "callWall": 0,
+      "wallSource": "archive_topPutCallStrike",
+      "trade": null
+    },
+    {
+      "dateKey": "2026-09-10",
+      "openTime": "09:16",
+      "openSpot": 23462.35,
+      "putWall": 23450,
+      "callWall": 23450,
+      "wallSource": "archive_topPutCallStrike",
+      "trade": {
+        "side": "CE",
+        "wall": 23450,
+        "wallType": "PUT_SUPPORT",
+        "entryMinutes": 560,
+        "entryTime": "09:20",
+        "entrySpot": 23441.8,
+        "targetSpot": 23456.8,
+        "exitMinutes": 733,
+        "exitTime": "12:13",
+        "exitSpot": 23457.45,
+        "result": "TARGET_15",
+        "holdMins": 173,
+        "spotMove": 15.65
+      }
+    },
+    {
+      "dateKey": "2026-09-11",
+      "openTime": "10:04",
+      "openSpot": 23269.85,
+      "putWall": 23250,
+      "callWall": 23200,
+      "wallSource": "archive_topPutCallStrike",
+      "trade": null
+    },
+    {
+      "dateKey": "2026-09-15",
+      "openTime": "09:16",
+      "openSpot": 23497.55,
+      "putWall": 23600,
+      "callWall": 23600,
+      "wallSource": "archive_topPutCallStrike",
+      "trade": null
+    },
+    {
+      "dateKey": "2026-09-16",
+      "openTime": "09:48",
+      "openSpot": 23131.2,
+      "putWall": 23100,
+      "callWall": 23100,
+      "wallSource": "archive_topPutCallStrike",
+      "trade": null
+    },
+    {
+      "dateKey": "2026-09-17",
+      "openTime": "09:16",
+      "openSpot": 23211.25,
+      "putWall": 23200,
+      "callWall": 23300,
+      "wallSource": "archive_topPutCallStrike",
+      "trade": {
+        "side": "PE",
+        "wall": 23300,
+        "wallType": "CALL_RESISTANCE",
+        "entryMinutes": 576,
+        "entryTime": "09:36",
+        "entrySpot": 23300.45,
+        "targetSpot": 23285.45,
+        "exitMinutes": 580,
+        "exitTime": "09:40",
+        "exitSpot": 23274.4,
+        "result": "TARGET_15",
+        "holdMins": 4,
+        "spotMove": -26.05
+      }
+    },
+    {
+      "dateKey": "2026-09-18",
+      "openTime": "09:16",
+      "openSpot": 23333.85,
+      "putWall": 23300,
+      "callWall": 23350,
+      "wallSource": "archive_topPutCallStrike",
+      "trade": {
+        "side": "PE",
+        "wall": 23350,
+        "wallType": "CALL_RESISTANCE",
+        "entryMinutes": 557,
+        "entryTime": "09:17",
+        "entrySpot": 23343.75,
+        "targetSpot": 23328.75,
+        "exitMinutes": 559,
+        "exitTime": "09:19",
+        "exitSpot": 23321.1,
+        "result": "TARGET_15",
+        "holdMins": 2,
+        "spotMove": -22.65
+      }
+    },
+    {
+      "dateKey": "2026-09-21",
+      "openTime": "09:27",
+      "openSpot": 23391.3,
+      "putWall": 0,
+      "callWall": 0,
+      "wallSource": "archive_topPutCallStrike",
+      "trade": null
+    },
+    {
+      "dateKey": "2026-09-22",
+      "openTime": "09:16",
+      "openSpot": 23458.25,
+      "putWall": 23400,
+      "callWall": 23500,
+      "wallSource": "archive_topPutCallStrike",
+      "trade": null
+    },
+    {
+      "dateKey": "2026-09-23",
+      "openTime": "09:16",
+      "openSpot": 23355.55,
+      "putWall": 23300,
+      "callWall": 23400,
+      "wallSource": "archive_topPutCallStrike",
+      "trade": {
+        "side": "PE",
+        "wall": 23400,
+        "wallType": "CALL_RESISTANCE",
+        "entryMinutes": 558,
+        "entryTime": "09:18",
+        "entrySpot": 23390.75,
+        "targetSpot": 23375.75,
+        "exitMinutes": 568,
+        "exitTime": "09:28",
+        "exitSpot": 23373.75,
+        "result": "TARGET_15",
+        "holdMins": 10,
+        "spotMove": -17
+      }
+    },
+    {
+      "dateKey": "2026-09-24",
+      "openTime": "09:16",
+      "openSpot": 23258,
+      "putWall": 23350,
+      "callWall": 23200,
+      "wallSource": "archive_topPutCallStrike",
+      "trade": {
+        "side": "PE",
+        "wall": 23200,
+        "wallType": "CALL_RESISTANCE",
+        "entryMinutes": 618,
+        "entryTime": "10:18",
+        "entrySpot": 23209.25,
+        "targetSpot": 23194.25,
+        "exitMinutes": 717,
+        "exitTime": "11:57",
+        "exitSpot": 23193.55,
+        "result": "TARGET_15",
+        "holdMins": 99,
+        "spotMove": -15.7
+      }
+    },
+    {
+      "dateKey": "2026-09-25",
+      "openTime": "09:16",
+      "openSpot": 23092.95,
+      "putWall": 23050,
+      "callWall": 23200,
+      "wallSource": "archive_topPutCallStrike",
+      "trade": {
+        "side": "CE",
+        "wall": 23050,
+        "wallType": "PUT_SUPPORT",
+        "entryMinutes": 584,
+        "entryTime": "09:44",
+        "entrySpot": 23051.1,
+        "targetSpot": 23066.1,
+        "exitMinutes": 604,
+        "exitTime": "10:04",
+        "exitSpot": 23066.4,
+        "result": "TARGET_15",
+        "holdMins": 20,
+        "spotMove": 15.3
+      }
+    },
+    {
+      "dateKey": "2026-09-28",
+      "openTime": "09:15",
+      "openSpot": 23057.5,
+      "putWall": 23000,
+      "callWall": 23200,
+      "wallSource": "absolute_oi_strikes",
+      "trade": null
+    }
+  ]
+}

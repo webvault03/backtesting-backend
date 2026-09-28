@@ -4,17 +4,20 @@ const LivePaperTrade = require('../models/livePaperTrade');
 const strategySixEngine = require('../services/liveShortStraddleEngineStrategy6');
 const strategyFourteenEngine = require('../services/liveEodOiWallsEngine');
 const strategyFifteenEngine = require('../services/liveEodOiWallsSpotEngine');
+const strategySixteenEngine = require('../services/liveOpenOiWallsEngine');
 const {
   STRATEGY_SIX_KEY,
   STRATEGY_SIX_SHORT_STRADDLE_LIVE_KEY,
   STRATEGY_FOURTEEN_EOD_OI_WALLS_LIVE_KEY,
   STRATEGY_FIFTEEN_EOD_OI_WALLS_SPOT_LIVE_KEY,
+  STRATEGY_SIXTEEN_OPEN_OI_WALLS_LIVE_KEY,
 } = require('../strategies/keys');
 
 const KNOWN_PAPER_LIVE_KEYS = [
   STRATEGY_SIX_SHORT_STRADDLE_LIVE_KEY,
   STRATEGY_FOURTEEN_EOD_OI_WALLS_LIVE_KEY,
   STRATEGY_FIFTEEN_EOD_OI_WALLS_SPOT_LIVE_KEY,
+  STRATEGY_SIXTEEN_OPEN_OI_WALLS_LIVE_KEY,
 ];
 
 function buildPaperLiveKeyFilter(ctx) {
@@ -220,7 +223,9 @@ function isStraddleLiveStrategyId(strategyId) {
 }
 
 function eodOiWallsPaperLiveCtx(strategyId) {
-  const engine = strategyId === 'strategy-15' ? strategyFifteenEngine : strategyFourteenEngine;
+  let engine = strategyFourteenEngine;
+  if (strategyId === 'strategy-15') engine = strategyFifteenEngine;
+  if (strategyId === 'strategy-16') engine = strategySixteenEngine;
   return {
     strategyId,
     strategyKey: engine.STRATEGY_KEY,
@@ -242,6 +247,7 @@ const LIVE_STRATEGIES = {
   'strategy-6': straddlePaperLiveCtx('strategy-6', strategySixEngine),
   'strategy-14': eodOiWallsPaperLiveCtx('strategy-14'),
   'strategy-15': eodOiWallsPaperLiveCtx('strategy-15'),
+  'strategy-16': eodOiWallsPaperLiveCtx('strategy-16'),
 };
 
 function getLiveContext(req) {
@@ -350,7 +356,9 @@ async function getStatus(req, res) {
             ? 'EOD OI Walls'
             : ctx.strategyId === 'strategy-15'
               ? 'EOD OI Walls Spot'
-              : 'Paper-live',
+              : ctx.strategyId === 'strategy-16'
+                ? 'Open OI Walls'
+                : 'Paper-live',
     });
     return res.json({
       ok: true,

@@ -1,0 +1,693 @@
+{
+  "summary": {
+    "rule": "Immediate at open (±25 pts of Call→PE / Put→CE). Else later touch until 10:45. Checkpoints are spot pts in option favor. Archives lack absolute OI strikes (except 2026-09-28).",
+    "days": 13,
+    "daysWithTrade": 10,
+    "daysNoTrade": 3,
+    "pe": 6,
+    "ce": 4,
+    "openImmediate": 6,
+    "laterTouch": 4,
+    "hit15Count": 9,
+    "hit15RatePct": 90,
+    "avgHoldTo15": 15,
+    "sumCloseFavorAt1515": 413.6,
+    "milestoneReachedSum": {
+      "5": 45,
+      "10": 90,
+      "15": 135,
+      "20": 180,
+      "25": 225,
+      "30": 270
+    }
+  },
+  "results": [
+    {
+      "dateKey": "2026-09-09",
+      "openTime": "10:21",
+      "openSpot": 23523.5,
+      "putWall": 23500,
+      "callWall": 23500,
+      "wallSource": "archive_topPutCallStrike",
+      "trade": {
+        "side": "PE",
+        "wall": 23500,
+        "wallType": "CALL_RESISTANCE",
+        "resMark": 23500,
+        "supMark": null,
+        "mode": "open_immediate",
+        "entryTime": "10:21",
+        "entryMinutes": 621,
+        "entrySpot": 23523.5,
+        "checks": {
+          "5": {
+            "time": "10:38",
+            "minutes": 638,
+            "spot": 23515.65,
+            "favor": 7.85
+          },
+          "10": {
+            "time": "10:39",
+            "minutes": 639,
+            "spot": 23510.5,
+            "favor": 13
+          },
+          "15": {
+            "time": "10:41",
+            "minutes": 641,
+            "spot": 23506.3,
+            "favor": 17.2
+          },
+          "20": {
+            "time": "10:43",
+            "minutes": 643,
+            "spot": 23502.45,
+            "favor": 21.05
+          },
+          "25": {
+            "time": "11:58",
+            "minutes": 718,
+            "spot": 23498.35,
+            "favor": 25.15
+          },
+          "30": {
+            "time": "12:00",
+            "minutes": 720,
+            "spot": 23491.7,
+            "favor": 31.8
+          }
+        },
+        "closeMark": {
+          "time": "15:15",
+          "minutes": 915,
+          "spot": 23462.45,
+          "favor": 61.05
+        },
+        "hit15": true,
+        "hit15Time": "10:41",
+        "hit15HoldMins": 20,
+        "closeFavor": 61.05
+      }
+    },
+    {
+      "dateKey": "2026-09-10",
+      "openTime": "09:16",
+      "openSpot": 23462.35,
+      "putWall": 23450,
+      "callWall": 23450,
+      "wallSource": "archive_topPutCallStrike",
+      "trade": {
+        "side": "PE",
+        "wall": 23450,
+        "wallType": "CALL_RESISTANCE",
+        "resMark": 23450,
+        "supMark": null,
+        "mode": "open_immediate",
+        "entryTime": "09:16",
+        "entryMinutes": 556,
+        "entrySpot": 23462.35,
+        "checks": {
+          "5": {
+            "time": "09:17",
+            "minutes": 557,
+            "spot": 23432.25,
+            "favor": 30.1
+          },
+          "10": {
+            "time": "09:17",
+            "minutes": 557,
+            "spot": 23432.25,
+            "favor": 30.1
+          },
+          "15": {
+            "time": "09:17",
+            "minutes": 557,
+            "spot": 23432.25,
+            "favor": 30.1
+          },
+          "20": {
+            "time": "09:17",
+            "minutes": 557,
+            "spot": 23432.25,
+            "favor": 30.1
+          },
+          "25": {
+            "time": "09:17",
+            "minutes": 557,
+            "spot": 23432.25,
+            "favor": 30.1
+          },
+          "30": {
+            "time": "09:17",
+            "minutes": 557,
+            "spot": 23432.25,
+            "favor": 30.1
+          }
+        },
+        "closeMark": {
+          "time": "15:15",
+          "minutes": 915,
+          "spot": 23389.25,
+          "favor": 73.1
+        },
+        "hit15": true,
+        "hit15Time": "09:17",
+        "hit15HoldMins": 1,
+        "closeFavor": 73.1
+      }
+    },
+    {
+      "dateKey": "2026-09-11",
+      "openTime": "10:04",
+      "openSpot": 23269.85,
+      "putWall": 23250,
+      "callWall": 23200,
+      "wallSource": "archive_topPutCallStrike",
+      "trade": {
+        "side": "CE",
+        "wall": 23250,
+        "wallType": "PUT_SUPPORT",
+        "resMark": null,
+        "supMark": 23250,
+        "mode": "open_immediate",
+        "entryTime": "10:04",
+        "entryMinutes": 604,
+        "entrySpot": 23269.85,
+        "checks": {
+          "5": {
+            "time": "10:06",
+            "minutes": 606,
+            "spot": 23275.25,
+            "favor": 5.4
+          },
+          "10": {
+            "time": "10:09",
+            "minutes": 609,
+            "spot": 23283.3,
+            "favor": 13.45
+          },
+          "15": {
+            "time": "10:14",
+            "minutes": 614,
+            "spot": 23295.05,
+            "favor": 25.2
+          },
+          "20": {
+            "time": "10:14",
+            "minutes": 614,
+            "spot": 23295.05,
+            "favor": 25.2
+          },
+          "25": {
+            "time": "10:14",
+            "minutes": 614,
+            "spot": 23295.05,
+            "favor": 25.2
+          },
+          "30": {
+            "time": "10:22",
+            "minutes": 622,
+            "spot": 23301.6,
+            "favor": 31.75
+          }
+        },
+        "closeMark": {
+          "time": "15:15",
+          "minutes": 915,
+          "spot": 23435.1,
+          "favor": 165.25
+        },
+        "hit15": true,
+        "hit15Time": "10:14",
+        "hit15HoldMins": 10,
+        "closeFavor": 165.25
+      }
+    },
+    {
+      "dateKey": "2026-09-15",
+      "openTime": "09:16",
+      "openSpot": 23497.55,
+      "putWall": 23600,
+      "callWall": 23600,
+      "wallSource": "archive_topPutCallStrike",
+      "trade": null
+    },
+    {
+      "dateKey": "2026-09-16",
+      "openTime": "09:48",
+      "openSpot": 23131.2,
+      "putWall": 23100,
+      "callWall": 23100,
+      "wallSource": "archive_topPutCallStrike",
+      "trade": null
+    },
+    {
+      "dateKey": "2026-09-17",
+      "openTime": "09:16",
+      "openSpot": 23211.25,
+      "putWall": 23200,
+      "callWall": 23300,
+      "wallSource": "archive_topPutCallStrike",
+      "trade": {
+        "side": "CE",
+        "wall": 23200,
+        "wallType": "PUT_SUPPORT",
+        "resMark": null,
+        "supMark": 23200,
+        "mode": "open_immediate",
+        "entryTime": "09:16",
+        "entryMinutes": 556,
+        "entrySpot": 23211.25,
+        "checks": {
+          "5": {
+            "time": "09:17",
+            "minutes": 557,
+            "spot": 23217.45,
+            "favor": 6.2
+          },
+          "10": {
+            "time": "09:18",
+            "minutes": 558,
+            "spot": 23244.1,
+            "favor": 32.85
+          },
+          "15": {
+            "time": "09:18",
+            "minutes": 558,
+            "spot": 23244.1,
+            "favor": 32.85
+          },
+          "20": {
+            "time": "09:18",
+            "minutes": 558,
+            "spot": 23244.1,
+            "favor": 32.85
+          },
+          "25": {
+            "time": "09:18",
+            "minutes": 558,
+            "spot": 23244.1,
+            "favor": 32.85
+          },
+          "30": {
+            "time": "09:18",
+            "minutes": 558,
+            "spot": 23244.1,
+            "favor": 32.85
+          }
+        },
+        "closeMark": {
+          "time": "15:15",
+          "minutes": 915,
+          "spot": 23293.1,
+          "favor": 81.85
+        },
+        "hit15": true,
+        "hit15Time": "09:18",
+        "hit15HoldMins": 2,
+        "closeFavor": 81.85
+      }
+    },
+    {
+      "dateKey": "2026-09-18",
+      "openTime": "09:16",
+      "openSpot": 23333.85,
+      "putWall": 23300,
+      "callWall": 23350,
+      "wallSource": "archive_topPutCallStrike",
+      "trade": {
+        "side": "PE",
+        "wall": 23350,
+        "wallType": "CALL_RESISTANCE",
+        "resMark": 23350,
+        "supMark": null,
+        "mode": "open_immediate",
+        "entryTime": "09:16",
+        "entryMinutes": 556,
+        "entrySpot": 23333.85,
+        "checks": {
+          "5": {
+            "time": "09:19",
+            "minutes": 559,
+            "spot": 23321.1,
+            "favor": 12.75
+          },
+          "10": {
+            "time": "09:19",
+            "minutes": 559,
+            "spot": 23321.1,
+            "favor": 12.75
+          },
+          "15": {
+            "time": "09:21",
+            "minutes": 561,
+            "spot": 23308.75,
+            "favor": 25.1
+          },
+          "20": {
+            "time": "09:21",
+            "minutes": 561,
+            "spot": 23308.75,
+            "favor": 25.1
+          },
+          "25": {
+            "time": "09:21",
+            "minutes": 561,
+            "spot": 23308.75,
+            "favor": 25.1
+          },
+          "30": {
+            "time": "09:28",
+            "minutes": 568,
+            "spot": 23298.7,
+            "favor": 35.15
+          }
+        },
+        "closeMark": {
+          "time": "15:15",
+          "minutes": 915,
+          "spot": 23341.85,
+          "favor": -8
+        },
+        "hit15": true,
+        "hit15Time": "09:21",
+        "hit15HoldMins": 5,
+        "closeFavor": -8
+      }
+    },
+    {
+      "dateKey": "2026-09-21",
+      "openTime": "09:27",
+      "openSpot": 23391.3,
+      "putWall": 23400,
+      "callWall": 23400,
+      "wallSource": "archive_topPutCallStrike",
+      "trade": {
+        "side": "PE",
+        "wall": 23400,
+        "wallType": "CALL_RESISTANCE",
+        "resMark": 23400,
+        "supMark": null,
+        "mode": "open_immediate",
+        "entryTime": "09:27",
+        "entryMinutes": 567,
+        "entrySpot": 23391.3,
+        "checks": {
+          "5": {
+            "time": "10:04",
+            "minutes": 604,
+            "spot": 23383.75,
+            "favor": 7.55
+          },
+          "10": {
+            "time": "10:07",
+            "minutes": 607,
+            "spot": 23380.15,
+            "favor": 11.15
+          },
+          "15": {
+            "time": "10:15",
+            "minutes": 615,
+            "spot": 23373.6,
+            "favor": 17.7
+          },
+          "20": {
+            "time": "10:26",
+            "minutes": 626,
+            "spot": 23367.25,
+            "favor": 24.05
+          },
+          "25": {
+            "time": "10:28",
+            "minutes": 628,
+            "spot": 23362,
+            "favor": 29.3
+          },
+          "30": {
+            "time": "10:35",
+            "minutes": 635,
+            "spot": 23361.05,
+            "favor": 30.25
+          }
+        },
+        "closeMark": {
+          "time": "15:15",
+          "minutes": 915,
+          "spot": 23429,
+          "favor": -37.7
+        },
+        "hit15": true,
+        "hit15Time": "10:15",
+        "hit15HoldMins": 48,
+        "closeFavor": -37.7
+      }
+    },
+    {
+      "dateKey": "2026-09-22",
+      "openTime": "09:16",
+      "openSpot": 23458.25,
+      "putWall": 23400,
+      "callWall": 23500,
+      "wallSource": "archive_topPutCallStrike",
+      "trade": {
+        "side": "CE",
+        "wall": 23400,
+        "wallType": "PUT_SUPPORT",
+        "resMark": null,
+        "supMark": 23400,
+        "mode": "later_touch",
+        "entryTime": "10:33",
+        "entryMinutes": 633,
+        "entrySpot": 23419.9,
+        "checks": {
+          "5": null,
+          "10": null,
+          "15": null,
+          "20": null,
+          "25": null,
+          "30": null
+        },
+        "closeMark": {
+          "time": "15:15",
+          "minutes": 915,
+          "spot": 23349.5,
+          "favor": -70.4
+        },
+        "hit15": false,
+        "hit15Time": null,
+        "hit15HoldMins": null,
+        "closeFavor": -70.4
+      }
+    },
+    {
+      "dateKey": "2026-09-23",
+      "openTime": "09:16",
+      "openSpot": 23355.55,
+      "putWall": 23300,
+      "callWall": 23400,
+      "wallSource": "archive_topPutCallStrike",
+      "trade": {
+        "side": "PE",
+        "wall": 23400,
+        "wallType": "CALL_RESISTANCE",
+        "resMark": 23400,
+        "supMark": null,
+        "mode": "later_touch",
+        "entryTime": "09:18",
+        "entryMinutes": 558,
+        "entrySpot": 23390.75,
+        "checks": {
+          "5": {
+            "time": "09:26",
+            "minutes": 566,
+            "spot": 23380.35,
+            "favor": 10.4
+          },
+          "10": {
+            "time": "09:26",
+            "minutes": 566,
+            "spot": 23380.35,
+            "favor": 10.4
+          },
+          "15": {
+            "time": "09:28",
+            "minutes": 568,
+            "spot": 23373.75,
+            "favor": 17
+          },
+          "20": {
+            "time": "09:29",
+            "minutes": 569,
+            "spot": 23369.7,
+            "favor": 21.05
+          },
+          "25": {
+            "time": "09:50",
+            "minutes": 590,
+            "spot": 23364.7,
+            "favor": 26.05
+          },
+          "30": {
+            "time": "09:54",
+            "minutes": 594,
+            "spot": 23360.7,
+            "favor": 30.05
+          }
+        },
+        "closeMark": {
+          "time": "15:15",
+          "minutes": 915,
+          "spot": 23431.35,
+          "favor": -40.6
+        },
+        "hit15": true,
+        "hit15Time": "09:28",
+        "hit15HoldMins": 10,
+        "closeFavor": -40.6
+      }
+    },
+    {
+      "dateKey": "2026-09-24",
+      "openTime": "09:16",
+      "openSpot": 23258,
+      "putWall": 23350,
+      "callWall": 23200,
+      "wallSource": "archive_topPutCallStrike",
+      "trade": {
+        "side": "PE",
+        "wall": 23200,
+        "wallType": "CALL_RESISTANCE",
+        "resMark": 23200,
+        "supMark": null,
+        "mode": "later_touch",
+        "entryTime": "09:47",
+        "entryMinutes": 587,
+        "entrySpot": 23221.5,
+        "checks": {
+          "5": {
+            "time": "09:56",
+            "minutes": 596,
+            "spot": 23214.45,
+            "favor": 7.05
+          },
+          "10": {
+            "time": "10:18",
+            "minutes": 618,
+            "spot": 23209.25,
+            "favor": 12.25
+          },
+          "15": {
+            "time": "10:23",
+            "minutes": 623,
+            "spot": 23197.85,
+            "favor": 23.65
+          },
+          "20": {
+            "time": "10:23",
+            "minutes": 623,
+            "spot": 23197.85,
+            "favor": 23.65
+          },
+          "25": {
+            "time": "11:57",
+            "minutes": 717,
+            "spot": 23193.55,
+            "favor": 27.95
+          },
+          "30": {
+            "time": "11:58",
+            "minutes": 718,
+            "spot": 23190.75,
+            "favor": 30.75
+          }
+        },
+        "closeMark": {
+          "time": "15:15",
+          "minutes": 915,
+          "spot": 23085.6,
+          "favor": 135.9
+        },
+        "hit15": true,
+        "hit15Time": "10:23",
+        "hit15HoldMins": 36,
+        "closeFavor": 135.9
+      }
+    },
+    {
+      "dateKey": "2026-09-25",
+      "openTime": "09:16",
+      "openSpot": 23092.95,
+      "putWall": 23050,
+      "callWall": 23200,
+      "wallSource": "archive_topPutCallStrike",
+      "trade": {
+        "side": "CE",
+        "wall": 23050,
+        "wallType": "PUT_SUPPORT",
+        "resMark": null,
+        "supMark": 23050,
+        "mode": "later_touch",
+        "entryTime": "09:20",
+        "entryMinutes": 560,
+        "entrySpot": 23074.95,
+        "checks": {
+          "5": {
+            "time": "09:23",
+            "minutes": 563,
+            "spot": 23091.85,
+            "favor": 16.9
+          },
+          "10": {
+            "time": "09:23",
+            "minutes": 563,
+            "spot": 23091.85,
+            "favor": 16.9
+          },
+          "15": {
+            "time": "09:23",
+            "minutes": 563,
+            "spot": 23091.85,
+            "favor": 16.9
+          },
+          "20": {
+            "time": "09:28",
+            "minutes": 568,
+            "spot": 23098.85,
+            "favor": 23.9
+          },
+          "25": {
+            "time": "09:29",
+            "minutes": 569,
+            "spot": 23104.2,
+            "favor": 29.25
+          },
+          "30": {
+            "time": "09:30",
+            "minutes": 570,
+            "spot": 23117,
+            "favor": 42.05
+          }
+        },
+        "closeMark": {
+          "time": "15:15",
+          "minutes": 915,
+          "spot": 23128.1,
+          "favor": 53.15
+        },
+        "hit15": true,
+        "hit15Time": "09:23",
+        "hit15HoldMins": 3,
+        "closeFavor": 53.15
+      }
+    },
+    {
+      "dateKey": "2026-09-28",
+      "openTime": "09:15",
+      "openSpot": 23057.5,
+      "putWall": 23000,
+      "callWall": 23200,
+      "wallSource": "absolute_oi_strikes",
+      "trade": null
+    }
+  ]
+}

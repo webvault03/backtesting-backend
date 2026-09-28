@@ -9,6 +9,8 @@ const STRATEGY_SIX_SHORT_STRADDLE_LIVE_KEY = 'strategy6_short_straddle_next_day_
 const STRATEGY_FOURTEEN_EOD_OI_WALLS_LIVE_KEY = 'strategy14_eod_oi_walls_live';
 /** EOD OI Walls Spot — same walls logic, Nifty cash/index price (not FUT), default +15 / no SL. */
 const STRATEGY_FIFTEEN_EOD_OI_WALLS_SPOT_LIVE_KEY = 'strategy15_eod_oi_walls_spot_live';
+/** Open OI Walls — 09:15 absolute Put/Call OI near spot · CE/PE at that strike · +15 · no SL. */
+const STRATEGY_SIXTEEN_OPEN_OI_WALLS_LIVE_KEY = 'strategy16_open_oi_walls_live';
 const MANUAL_CONSOLE_LIVE_KEY = 'manual_console_live';
 /** Stock F&O manual trade desk (no day-close; separate wallet/book). */
 const MANUAL_STOCK_LIVE_KEY = 'manual_stock_live';
@@ -23,6 +25,7 @@ module.exports = {
   STRATEGY_SIX_SHORT_STRADDLE_LIVE_KEY,
   STRATEGY_FOURTEEN_EOD_OI_WALLS_LIVE_KEY,
   STRATEGY_FIFTEEN_EOD_OI_WALLS_SPOT_LIVE_KEY,
+  STRATEGY_SIXTEEN_OPEN_OI_WALLS_LIVE_KEY,
   MANUAL_CONSOLE_LIVE_KEY,
   MANUAL_STOCK_LIVE_KEY,
   OI_FLOW_TRACKER_LIVE_KEY,

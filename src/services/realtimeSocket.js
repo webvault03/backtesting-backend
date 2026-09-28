@@ -22,6 +22,7 @@ const PAPER_LIVE_ROOMS = {
   'manual-console': 'paper-live:manual-console',
   'strategy-14': 'paper-live:strategy-14',
   'strategy-15': 'paper-live:strategy-15',
+  'strategy-16': 'paper-live:strategy-16',
 };
 
 function paperLiveRoom(strategyId) {
@@ -88,6 +89,8 @@ function initRealtime(httpServer) {
           engine = require('./liveEodOiWallsEngine');
         } else if (strategyId === 'strategy-15') {
           engine = require('./liveEodOiWallsSpotEngine');
+        } else if (strategyId === 'strategy-16') {
+          engine = require('./liveOpenOiWallsEngine');
         } else {
           return;
         }

@@ -89,6 +89,28 @@ const liveWalletSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.Mixed,
       default: null,
     },
+    /** Open OI Walls — 09:15 absolute Put/Call OI · ladder +5…+30 · exit 15:15 · no SL. */
+    strategy16EngineSettings: {
+      symbol: { type: String, default: 'NIFTY' },
+      lotCount: { type: Number, default: 5 },
+      tradeFromTime: { type: String, default: '09:15' },
+      tradeToTime: { type: String, default: '10:45' },
+      eodExitTime: { type: String, default: '15:15' },
+      openCaptureFromTime: { type: String, default: '09:15' },
+      targetPoints: { type: Number, default: 30 },
+      stopLossPoints: { type: Number, default: null },
+      hasStopLoss: { type: Boolean, default: false },
+      proximityPoints: { type: Number, default: 25 },
+      strikeLookaround: { type: Number, default: 12 },
+      maxTradesPerDay: { type: Number, default: 1 },
+      cooldownMinutes: { type: Number, default: 0 },
+      perTradeCost: { type: Number, default: 100 },
+    },
+    /** Same-day open Put/Call walls captured at 09:15. */
+    strategy16OpenWalls: {
+      type: mongoose.Schema.Types.Mixed,
+      default: null,
+    },
     /** OI Flow Tracker paper (Put writing→CALL / Put buying→PUT). */
     oiFlowEngineSettings: {
       enabled: { type: Boolean, default: true },
