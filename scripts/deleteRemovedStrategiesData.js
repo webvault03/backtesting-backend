@@ -9,6 +9,7 @@
  * - Cover Scalp / OCC (oi_cover_chase_live / paper_live_oi_cover_chase)
  * - Flow Scalp E/B (flow_scalp_eb_live / paper_live_flow_scalp_eb) — 5m after SL, not Prime
  * - OI Wall Scalp (manual_oi_auto_live / paper_live_manual_oi_auto)
+ * - Flow Match Scalp (flow_match_scalp_live / paper_live_flow_match_scalp)
  *
  * Usage: node scripts/deleteRemovedStrategiesData.js
  */
@@ -27,6 +28,7 @@ const STRATEGY_KEYS = [
   'oi_cover_chase_live',
   'flow_scalp_eb_live',
   'manual_oi_auto_live',
+  'flow_match_scalp_live',
 ];
 const WALLET_KEYS = [
   'paper_live_oi_pulse_scalp',
@@ -38,6 +40,7 @@ const WALLET_KEYS = [
   'paper_live_oi_cover_chase',
   'paper_live_flow_scalp_eb',
   'paper_live_manual_oi_auto',
+  'paper_live_flow_match_scalp',
 ];
 
 async function main() {
@@ -62,12 +65,13 @@ async function main() {
             'oi-cover-chase',
             'flow-scalp-eb',
             'manual-oi-auto',
+            'flow-match-scalp',
           ],
         },
       },
       {
         notes:
-          /oi_pulse_scalp|fut_doi_wall|oi_wall_reaction|cover_impulse_scalp|oi_trap_expansion|oi_flow_eb|oi_cover_chase|flow_scalp_eb|manual_oi_auto/i,
+          /oi_pulse_scalp|fut_doi_wall|oi_wall_reaction|cover_impulse_scalp|oi_trap_expansion|oi_flow_eb|oi_cover_chase|flow_scalp_eb|manual_oi_auto|flow_match_scalp/i,
       },
     ],
   };
@@ -92,6 +96,7 @@ async function main() {
         oiCoverChaseEngineSettings: 1,
         flowScalpEbEngineSettings: 1,
         manualOiAutoEngineSettings: 1,
+        flowMatchScalpEngineSettings: 1,
       },
     },
   );

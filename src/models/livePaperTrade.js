@@ -60,8 +60,8 @@ const livePaperTradeSchema = new mongoose.Schema(
     /** Manual console: testing trades stay off calendar / wallet P/L / main history. */
     isTesting: { type: Boolean, default: false, index: true },
     /**
-     * Flow Match Scalp: true when this fill was entered after the day's ₹ target
-     * was already hit (continuation book until trade window end).
+     * Legacy: fill entered after a day's ₹ target was already hit
+     * (continuation book). Kept for historical trade documents.
      */
     afterDayTarget: { type: Boolean, default: false, index: true },
   },

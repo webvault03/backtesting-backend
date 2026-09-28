@@ -21,6 +21,7 @@ function broadcast(event, payload) {
 const PAPER_LIVE_ROOMS = {
   'manual-console': 'paper-live:manual-console',
   'strategy-14': 'paper-live:strategy-14',
+  'strategy-15': 'paper-live:strategy-15',
 };
 
 function paperLiveRoom(strategyId) {
@@ -85,6 +86,8 @@ function initRealtime(httpServer) {
           engine = require('./manualTradeEngine');
         } else if (strategyId === 'strategy-14') {
           engine = require('./liveEodOiWallsEngine');
+        } else if (strategyId === 'strategy-15') {
+          engine = require('./liveEodOiWallsSpotEngine');
         } else {
           return;
         }

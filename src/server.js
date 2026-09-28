@@ -10,12 +10,14 @@ const { scheduleNseHolidayRefresh } = require('./services/nseHolidayService');
 const { initRealtime } = require('./services/realtimeSocket');
 const strategySixPaperEngine = require('./services/liveShortStraddleEngineStrategy6');
 const strategyFourteenPaperEngine = require('./services/liveEodOiWallsEngine');
+const strategyFifteenPaperEngine = require('./services/liveEodOiWallsSpotEngine');
 
 async function bootBackgroundServices() {
   try {
     const s6 = require('./services/liveShortStraddleEngineStrategy6');
     await s6.reconcileOpenTrades();
     await require('./services/liveEodOiWallsEngine').reconcileOpenTrades();
+    await require('./services/liveEodOiWallsSpotEngine').reconcileOpenTrades();
   } catch (err) {
     console.warn('Paper-live open-trade reconcile:', err.message);
   }
@@ -44,13 +46,6 @@ async function bootBackgroundServices() {
     await flowScalpPrime.ensureEngineRunning();
   } catch (err) {
     console.warn('Flow Scalp Prime engine boot:', err.message);
-  }
-
-  try {
-    const flowMatchScalp = require('./services/flowMatchScalpEngine');
-    await flowMatchScalp.ensureEngineRunning();
-  } catch (err) {
-    console.warn('Flow Match Scalp engine boot:', err.message);
   }
 
   try {
@@ -95,9 +90,20 @@ async function bootBackgroundServices() {
   }
 
   try {
+    const boot = await strategyFifteenPaperEngine.ensureEngineRunning();
+    if (boot.ok) {
+      console.log('EOD OI Walls Spot paper-live started (strategy-15)');
+    } else {
+      console.warn('EOD OI Walls Spot paper-live boot:', boot.error || 'unknown');
+    }
+  } catch (err) {
+    console.warn('EOD OI Walls Spot paper-live boot failed:', err.message);
+  }
+
+  try {
     const { notifyDhanConnectivityRestored } = require('./services/livePaperEngineRecovery');
     const resume = await notifyDhanConnectivityRestored();
-    if (resume.strategy6?.resumed || resume.strategy14?.resumed) {
+    if (resume.strategy6?.resumed || resume.strategy14?.resumed || resume.strategy15?.resumed) {
       console.log('Paper-live resumed open positions from MongoDB after boot', resume);
     }
   } catch (err) {

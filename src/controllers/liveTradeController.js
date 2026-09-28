@@ -3,15 +3,18 @@ const LiveWallet = require('../models/liveWallet');
 const LivePaperTrade = require('../models/livePaperTrade');
 const strategySixEngine = require('../services/liveShortStraddleEngineStrategy6');
 const strategyFourteenEngine = require('../services/liveEodOiWallsEngine');
+const strategyFifteenEngine = require('../services/liveEodOiWallsSpotEngine');
 const {
   STRATEGY_SIX_KEY,
   STRATEGY_SIX_SHORT_STRADDLE_LIVE_KEY,
   STRATEGY_FOURTEEN_EOD_OI_WALLS_LIVE_KEY,
+  STRATEGY_FIFTEEN_EOD_OI_WALLS_SPOT_LIVE_KEY,
 } = require('../strategies/keys');
 
 const KNOWN_PAPER_LIVE_KEYS = [
   STRATEGY_SIX_SHORT_STRADDLE_LIVE_KEY,
   STRATEGY_FOURTEEN_EOD_OI_WALLS_LIVE_KEY,
+  STRATEGY_FIFTEEN_EOD_OI_WALLS_SPOT_LIVE_KEY,
 ];
 
 function buildPaperLiveKeyFilter(ctx) {
@@ -217,26 +220,28 @@ function isStraddleLiveStrategyId(strategyId) {
 }
 
 function eodOiWallsPaperLiveCtx(strategyId) {
+  const engine = strategyId === 'strategy-15' ? strategyFifteenEngine : strategyFourteenEngine;
   return {
     strategyId,
-    strategyKey: strategyFourteenEngine.STRATEGY_KEY,
-    startEngine: strategyFourteenEngine.startEngine,
-    stopEngine: strategyFourteenEngine.stopEngine,
-    updateEngineSettings: strategyFourteenEngine.updateEngineSettings,
-    getEngineSnapshot: strategyFourteenEngine.getEngineSnapshot,
-    ensureWallet: strategyFourteenEngine.ensureWallet,
-    recalcWallet: strategyFourteenEngine.recalcWalletFromTrades,
-    ensureRunning: strategyFourteenEngine.ensureEngineRunning,
-    reconcileOpenTrades: strategyFourteenEngine.reconcileOpenTrades,
-    closeOpenPosition: strategyFourteenEngine.closeOpenPosition,
-    refreshOpenMark: strategyFourteenEngine.refreshOpenPositionMarkForStatus,
-    clearDailySkip: strategyFourteenEngine.clearDailySkipState,
+    strategyKey: engine.STRATEGY_KEY,
+    startEngine: engine.startEngine,
+    stopEngine: engine.stopEngine,
+    updateEngineSettings: engine.updateEngineSettings,
+    getEngineSnapshot: engine.getEngineSnapshot,
+    ensureWallet: engine.ensureWallet,
+    recalcWallet: engine.recalcWalletFromTrades,
+    ensureRunning: engine.ensureEngineRunning,
+    reconcileOpenTrades: engine.reconcileOpenTrades,
+    closeOpenPosition: engine.closeOpenPosition,
+    refreshOpenMark: engine.refreshOpenPositionMarkForStatus,
+    clearDailySkip: engine.clearDailySkipState,
   };
 }
 
 const LIVE_STRATEGIES = {
   'strategy-6': straddlePaperLiveCtx('strategy-6', strategySixEngine),
   'strategy-14': eodOiWallsPaperLiveCtx('strategy-14'),
+  'strategy-15': eodOiWallsPaperLiveCtx('strategy-15'),
 };
 
 function getLiveContext(req) {
@@ -343,7 +348,9 @@ async function getStatus(req, res) {
           ? 'Short straddle'
           : ctx.strategyId === 'strategy-14'
             ? 'EOD OI Walls'
-            : 'Paper-live',
+            : ctx.strategyId === 'strategy-15'
+              ? 'EOD OI Walls Spot'
+              : 'Paper-live',
     });
     return res.json({
       ok: true,

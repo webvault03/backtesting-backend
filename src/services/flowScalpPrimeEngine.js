@@ -1,7 +1,9 @@
 /**
  * Flow Scalp Prime — paper live.
  * Live / forming OI Flow Bias (Bull→CE / Bear→PE) + green strike candle ·
- * +2/−3 · 09:30–14:30 · optional day ₹ target (default off) · 15m after SL · 1 open · EOD 15:15.
+ * +2/−3 · 09:30–14:30 · optional day ₹ target (default off) ·
+ * SL pause: 15m after each SL; after 3 consecutive SLs → 45m before next entry ·
+ * 1 open · EOD 15:15.
  */
 const LivePaperTrade = require('../models/livePaperTrade');
 const LiveWallet = require('../models/liveWallet');
@@ -25,8 +27,12 @@ const STRATEGY_ID = 'flow-scalp-prime';
 
 const LOOP_MS = 5000;
 const MIN_HOLD_MS = 15000;
-/** After a STOP_LOSS, block new entries for this long. */
+/** After a STOP_LOSS, block new entries for this long (normal). */
 const SL_COOLDOWN_MS = 15 * 60 * 1000;
+/** After 3 consecutive STOP_LOSS exits, block new entries for this long. */
+const SL_STREAK_BREAK_MS = 45 * 60 * 1000;
+/** Consecutive SL count that triggers the longer break. */
+const SL_STREAK_FOR_LONG_COOLDOWN = 3;
 
 const DEFAULT_SETTINGS = {
   enabled: true,
@@ -54,8 +60,13 @@ const engineState = {
   tickInFlight: false,
   openTradeId: null,
   lastExitAtMs: 0,
-  /** Timestamp of last STOP_LOSS exit — used for 15m no-entry cooldown. */
+  /** Timestamp of last STOP_LOSS exit — used for SL no-entry cooldown. */
   lastStopLossAtMs: 0,
+  /**
+   * Consecutive STOP_LOSS exits today (resets on TARGET / non-SL exit / new IST day).
+   * At >= 3 → cooldown is 45m instead of 15m.
+   */
+  consecutiveStopLossCount: 0,
   entryArmed: true,
   lastEntryKey: null,
   lastEntryBarMinutes: null,
@@ -81,6 +92,58 @@ function parseHhmmToMinutes(raw) {
   const m = /^(\d{1,2}):(\d{2})$/.exec(String(raw || '').trim());
   if (!m) return null;
   return Number(m[1]) * 60 + Number(m[2]);
+}
+
+/** Active SL cooldown length based on consecutive SL streak. */
+function currentSlCooldownMs() {
+  return engineState.consecutiveStopLossCount >= SL_STREAK_FOR_LONG_COOLDOWN
+    ? SL_STREAK_BREAK_MS
+    : SL_COOLDOWN_MS;
+}
+
+function slCooldownSnapshot() {
+  const needMs = currentSlCooldownMs();
+  const needSec = Math.floor(needMs / 1000);
+  if (!(engineState.lastStopLossAtMs > 0)) {
+    return {
+      active: false,
+      remainSec: 0,
+      needSec,
+      streak: engineState.consecutiveStopLossCount,
+      longBreak: engineState.consecutiveStopLossCount >= SL_STREAK_FOR_LONG_COOLDOWN,
+    };
+  }
+  const since = Date.now() - engineState.lastStopLossAtMs;
+  const remainMs = needMs - since;
+  if (remainMs <= 0) {
+    return {
+      active: false,
+      remainSec: 0,
+      needSec,
+      streak: engineState.consecutiveStopLossCount,
+      longBreak: engineState.consecutiveStopLossCount >= SL_STREAK_FOR_LONG_COOLDOWN,
+    };
+  }
+  return {
+    active: true,
+    remainSec: Math.ceil(remainMs / 1000),
+    needSec,
+    streak: engineState.consecutiveStopLossCount,
+    longBreak: engineState.consecutiveStopLossCount >= SL_STREAK_FOR_LONG_COOLDOWN,
+  };
+}
+
+/**
+ * Count trailing consecutive STOP_LOSS closes for dateKey (newest first until non-SL).
+ */
+function countTrailingStopLosses(closedAsc) {
+  let streak = 0;
+  for (let i = closedAsc.length - 1; i >= 0; i -= 1) {
+    const reason = String(closedAsc[i]?.reason || '').toUpperCase();
+    if (reason === 'STOP_LOSS') streak += 1;
+    else break;
+  }
+  return streak;
 }
 
 function inWindow(clockMinutes, fromStr, toStr) {
@@ -274,6 +337,8 @@ async function refreshDayBook(dateKey) {
     engineState.dayStopReason = null;
     engineState.lastEntryBarMinutes = null;
     engineState.optionMinuteOpens = {};
+    engineState.consecutiveStopLossCount = 0;
+    engineState.lastStopLossAtMs = 0;
   }
 
   const closed = await LivePaperTrade.find({
@@ -319,6 +384,7 @@ async function refreshDayBook(dateKey) {
   engineState.dayStopReason = dayStopReason;
   engineState.dayTargetInr = dayTargetInr;
   engineState.lastEntryBarMinutes = lastBar;
+  engineState.consecutiveStopLossCount = countTrailingStopLosses(closed);
   return {
     dayPts,
     dayPnlInr,
@@ -451,9 +517,13 @@ async function finalizeTrade(trade, { exitPremium, mark, reason, futFallback = n
     engineState.openTradeId = null;
     engineState.lastExitAtMs = Date.now();
     if (String(reason || '').toUpperCase() === 'STOP_LOSS') {
+      // streak already refreshed from today's closed trades
       engineState.lastStopLossAtMs = Date.now();
+    } else {
+      // TARGET / EOD / manual — no SL cooldown (streak already 0 from refreshDayBook)
+      engineState.lastStopLossAtMs = 0;
     }
-    // Re-arm; tryEnter still respects SL 15m cooldown when lastStopLossAtMs is set
+    // Re-arm; tryEnter still respects SL cooldown when lastStopLossAtMs is set
     engineState.entryArmed = true;
     return trade;
   } finally {
@@ -619,13 +689,16 @@ async function tryEnter(signal, tape) {
   }
 
   if (engineState.lastStopLossAtMs > 0) {
+    const needMs = currentSlCooldownMs();
     const sinceSlMs = Date.now() - engineState.lastStopLossAtMs;
-    if (sinceSlMs < SL_COOLDOWN_MS) {
-      const remainSec = Math.ceil((SL_COOLDOWN_MS - sinceSlMs) / 1000);
+    if (sinceSlMs < needMs) {
+      const remainSec = Math.ceil((needMs - sinceSlMs) / 1000);
       engineState.lastEntryDebug = {
         skip: 'sl_cooldown',
         remainSec,
-        needSec: Math.floor(SL_COOLDOWN_MS / 1000),
+        needSec: Math.floor(needMs / 1000),
+        streak: engineState.consecutiveStopLossCount,
+        longBreak: engineState.consecutiveStopLossCount >= SL_STREAK_FOR_LONG_COOLDOWN,
       };
       return;
     }
@@ -953,15 +1026,23 @@ function startLoop() {
 }
 
 async function hydrateLastStopLossCooldown() {
-  const lastSl = await LivePaperTrade.findOne({
+  const clock = getIstClock(new Date());
+  const closedToday = await LivePaperTrade.find({
     strategyKey: STRATEGY_KEY,
+    entryDateKey: clock.dateKey,
     status: 'CLOSED',
-    reason: 'STOP_LOSS',
     exitTime: { $ne: null },
+    isTesting: { $ne: true },
   })
-    .sort({ exitTime: -1 })
-    .select({ exitTime: 1 })
+    .sort({ entryTime: 1 })
+    .select({ reason: 1, exitTime: 1 })
     .lean();
+
+  engineState.consecutiveStopLossCount = countTrailingStopLosses(closedToday);
+
+  const lastSl = [...closedToday].reverse().find(
+    (t) => String(t.reason || '').toUpperCase() === 'STOP_LOSS',
+  );
   if (!lastSl?.exitTime) {
     engineState.lastStopLossAtMs = 0;
     return;
@@ -971,8 +1052,8 @@ async function hydrateLastStopLossCooldown() {
     engineState.lastStopLossAtMs = 0;
     return;
   }
-  // Only keep cooldown if still inside the 15m window
-  if (Date.now() - ms < SL_COOLDOWN_MS) {
+  const needMs = currentSlCooldownMs();
+  if (Date.now() - ms < needMs) {
     engineState.lastStopLossAtMs = ms;
   } else {
     engineState.lastStopLossAtMs = 0;
@@ -1105,21 +1186,7 @@ async function getBookSummary() {
     enabled: Boolean(engineState.settings.enabled),
     signal: engineState.lastSignal,
     lastEntryDebug: engineState.lastEntryDebug,
-    slCooldown: (() => {
-      if (!(engineState.lastStopLossAtMs > 0)) {
-        return { active: false, remainSec: 0, needSec: Math.floor(SL_COOLDOWN_MS / 1000) };
-      }
-      const since = Date.now() - engineState.lastStopLossAtMs;
-      const remainMs = SL_COOLDOWN_MS - since;
-      if (remainMs <= 0) {
-        return { active: false, remainSec: 0, needSec: Math.floor(SL_COOLDOWN_MS / 1000) };
-      }
-      return {
-        active: true,
-        remainSec: Math.ceil(remainMs / 1000),
-        needSec: Math.floor(SL_COOLDOWN_MS / 1000),
-      };
-    })(),
+    slCooldown: slCooldownSnapshot(),
     wallet: {
       walletKey: WALLET_KEY,
       balance: wallet.balance,

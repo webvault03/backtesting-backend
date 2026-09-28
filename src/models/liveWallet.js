@@ -67,6 +67,28 @@ const liveWalletSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.Mixed,
       default: null,
     },
+    /** EOD OI Walls Spot — Nifty cash/index proximity · default +15 · no SL. */
+    strategy15EngineSettings: {
+      symbol: { type: String, default: 'NIFTY' },
+      lotCount: { type: Number, default: 5 },
+      tradeFromTime: { type: String, default: '09:20' },
+      tradeToTime: { type: String, default: '15:10' },
+      eodExitTime: { type: String, default: '15:20' },
+      eodCaptureFromTime: { type: String, default: '15:15' },
+      targetPoints: { type: Number, default: 15 },
+      stopLossPoints: { type: Number, default: null },
+      hasStopLoss: { type: Boolean, default: false },
+      proximityPoints: { type: Number, default: 20 },
+      strikeLookaround: { type: Number, default: 12 },
+      maxTradesPerDay: { type: Number, default: 1 },
+      cooldownMinutes: { type: Number, default: 2 },
+      perTradeCost: { type: Number, default: 100 },
+    },
+    /** Spot variant watchlist (separate from FUT strategy-14). */
+    strategy15Watchlist: {
+      type: mongoose.Schema.Types.Mixed,
+      default: null,
+    },
     /** OI Flow Tracker paper (Put writing→CALL / Put buying→PUT). */
     oiFlowEngineSettings: {
       enabled: { type: Boolean, default: true },
@@ -97,19 +119,6 @@ const liveWalletSchema = new mongoose.Schema(
       perTradeCost: { type: Number, default: 100 },
       /** Day ₹ profit lock at 10 lots; 0 = off (default). Scales with lotCount when set. */
       dailyTargetInrAt10Lots: { type: Number, default: 0 },
-    },
-    /** Flow Match Scalp — closed 3m Strong+Match · +2/−3 · 15m after SL · day ₹2k @ 10 lots. */
-    flowMatchScalpEngineSettings: {
-      enabled: { type: Boolean, default: true },
-      symbol: { type: String, default: 'NIFTY' },
-      lotCount: { type: Number, default: 10 },
-      tradeFromTime: { type: String, default: '09:30' },
-      tradeToTime: { type: String, default: '14:30' },
-      eodExitTime: { type: String, default: '15:15' },
-      optionSlPts: { type: Number, default: 3 },
-      optionTpPts: { type: Number, default: 2 },
-      perTradeCost: { type: Number, default: 100 },
-      dailyTargetInrAt10Lots: { type: Number, default: 2000 },
     },
     /** Liquidity OI Chase paper (sweep+break + OI fuel). */
     liquidityOiChaseEngineSettings: {
