@@ -12,6 +12,7 @@ const strategySixPaperEngine = require('./services/liveShortStraddleEngineStrate
 const strategyFourteenPaperEngine = require('./services/liveEodOiWallsEngine');
 const strategyFifteenPaperEngine = require('./services/liveEodOiWallsSpotEngine');
 const strategySixteenPaperEngine = require('./services/liveOpenOiWallsEngine');
+const strategySeventeenPaperEngine = require('./services/liveOiCandleAgreeEngine');
 
 async function bootBackgroundServices() {
   try {
@@ -20,6 +21,7 @@ async function bootBackgroundServices() {
     await require('./services/liveEodOiWallsEngine').reconcileOpenTrades();
     await require('./services/liveEodOiWallsSpotEngine').reconcileOpenTrades();
     await require('./services/liveOpenOiWallsEngine').reconcileOpenTrades();
+    await require('./services/liveOiCandleAgreeEngine').reconcileOpenTrades();
   } catch (err) {
     console.warn('Paper-live open-trade reconcile:', err.message);
   }
@@ -114,6 +116,17 @@ async function bootBackgroundServices() {
   }
 
   try {
+    const boot = await strategySeventeenPaperEngine.ensureEngineRunning();
+    if (boot.ok) {
+      console.log('OI + Candle Agree paper-live started (strategy-17)');
+    } else {
+      console.warn('OI + Candle Agree paper-live boot:', boot.error || 'unknown');
+    }
+  } catch (err) {
+    console.warn('OI + Candle Agree paper-live boot failed:', err.message);
+  }
+
+  try {
     const { notifyDhanConnectivityRestored } = require('./services/livePaperEngineRecovery');
     const resume = await notifyDhanConnectivityRestored();
     if (
@@ -121,6 +134,7 @@ async function bootBackgroundServices() {
       || resume.strategy14?.resumed
       || resume.strategy15?.resumed
       || resume.strategy16?.resumed
+      || resume.strategy17?.resumed
     ) {
       console.log('Paper-live resumed open positions from MongoDB after boot', resume);
     }

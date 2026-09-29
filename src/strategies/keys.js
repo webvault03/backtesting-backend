@@ -11,6 +11,8 @@ const STRATEGY_FOURTEEN_EOD_OI_WALLS_LIVE_KEY = 'strategy14_eod_oi_walls_live';
 const STRATEGY_FIFTEEN_EOD_OI_WALLS_SPOT_LIVE_KEY = 'strategy15_eod_oi_walls_spot_live';
 /** Open OI Walls — 09:15 absolute Put/Call OI near spot · CE/PE at that strike · +15 · no SL. */
 const STRATEGY_SIXTEEN_OPEN_OI_WALLS_LIVE_KEY = 'strategy16_open_oi_walls_live';
+/** OI + Candle Agree — 15m REAL agree · ATM CE/PE · ladder +5…+30 · exit 15:15 · no SL. */
+const STRATEGY_SEVENTEEN_OI_CANDLE_AGREE_LIVE_KEY = 'strategy17_oi_candle_agree_live';
 const MANUAL_CONSOLE_LIVE_KEY = 'manual_console_live';
 /** Stock F&O manual trade desk (no day-close; separate wallet/book). */
 const MANUAL_STOCK_LIVE_KEY = 'manual_stock_live';
@@ -26,6 +28,7 @@ module.exports = {
   STRATEGY_FOURTEEN_EOD_OI_WALLS_LIVE_KEY,
   STRATEGY_FIFTEEN_EOD_OI_WALLS_SPOT_LIVE_KEY,
   STRATEGY_SIXTEEN_OPEN_OI_WALLS_LIVE_KEY,
+  STRATEGY_SEVENTEEN_OI_CANDLE_AGREE_LIVE_KEY,
   MANUAL_CONSOLE_LIVE_KEY,
   MANUAL_STOCK_LIVE_KEY,
   OI_FLOW_TRACKER_LIVE_KEY,

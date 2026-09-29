@@ -57,6 +57,34 @@ async function getOiFlowArchiveDownload(req, res) {
   }
 }
 
+/**
+ * Tracker day view — today = live minutes; past = archive JSON (read-only, no DB write).
+ * GET /api/oi-flow/day/:dateKey
+ */
+async function getOiFlowDay(req, res) {
+  try {
+    const dateKey = String(req.params?.dateKey || req.query?.date || '').slice(0, 10);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(dateKey)) {
+      return res.status(400).json({ ok: false, error: 'Invalid dateKey (YYYY-MM-DD)' });
+    }
+    const clock = getIstClock(new Date());
+    if (dateKey === clock.dateKey) {
+      const data = await oiFlowEngine.listTodayRows();
+      return res.json({ ok: true, historical: false, source: 'live', ...data });
+    }
+    const data = await archiveService.getDayTapeForTracker(dateKey);
+    if (!data) {
+      return res.status(404).json({
+        ok: false,
+        error: `No OI archive for ${dateKey}. Pick a date from the calendar that has saved JSON.`,
+      });
+    }
+    return res.json(data);
+  } catch (error) {
+    return res.status(500).json({ ok: false, error: error.message });
+  }
+}
+
 async function getOiFlowHeaderSignal(_req, res) {
   try {
     const data = await oiFlowEngine.getHeaderSignal();
@@ -93,6 +121,7 @@ async function postOiFlowSignalsBackfill(req, res) {
 module.exports = {
   getOiFlowStatus,
   getOiFlowToday,
+  getOiFlowDay,
   getOiFlowArchives,
   getOiFlowArchiveDownload,
   getOiFlowHeaderSignal,

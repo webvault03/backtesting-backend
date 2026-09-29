@@ -4,6 +4,7 @@
 const OiFlowMinuteRow = require('../models/oiFlowMinuteRow');
 const OiFlowDayArchive = require('../models/oiFlowDayArchive');
 const { build5mBars } = require('../utils/oiFlow5mPatterns');
+const { hydrateArchiveRowsForTracker } = require('../utils/oiFlowArchiveHydrate');
 const { getIstClock } = require('../utils/dateTime');
 
 const SYMBOL = 'NIFTY';
@@ -38,9 +39,10 @@ async function archiveDay(dateKey, { symbol = SYMBOL, force = false } = {}) {
         dateKey: dk,
         intervalMin: INTERVAL_MIN,
       })
-        .select('dateKey rowCount archivedAt')
+        .select('dateKey rowCount archivedAt payload.schema')
         .lean();
-      if (existing && Number(existing.rowCount) > 0) {
+      const isV2 = existing?.payload?.schema === 'oi-flow-tape-v2';
+      if (existing && Number(existing.rowCount) > 0 && isV2) {
         return {
           ok: true,
           skipped: true,
@@ -50,6 +52,7 @@ async function archiveDay(dateKey, { symbol = SYMBOL, force = false } = {}) {
           archivedAt: existing.archivedAt,
         };
       }
+      // Compact / pre-v2 archive: upgrade only while live minute rows still exist.
     }
 
     const sourceRows = await OiFlowMinuteRow.find({
@@ -66,7 +69,40 @@ async function archiveDay(dateKey, { symbol = SYMBOL, force = false } = {}) {
     }
 
     const barsAsc = build5mBars(sourceRows, INTERVAL_MIN);
-    const rows = [...barsAsc].reverse();
+    const byMin = new Map(sourceRows.map((r) => [Number(r.minutes), r]));
+
+    // Merge act/strength bars with live minute totals so tracker columns match /today.
+    const rowsAsc = barsAsc.map((bar) => {
+      const src = byMin.get(Number(bar.minutes)) || {};
+      const spot = Number(bar.spot ?? src.spotPrice ?? src.spot);
+      return {
+        ...bar,
+        spot: Number.isFinite(spot) ? spot : bar.spot,
+        spotPrice: Number.isFinite(spot) ? spot : src.spotPrice ?? null,
+        // Day + interval ΔOI (same as live tracker)
+        dayCallChgOi: Number.isFinite(Number(src.dayCallChgOi)) ? Number(src.dayCallChgOi) : null,
+        dayPutChgOi: Number.isFinite(Number(src.dayPutChgOi)) ? Number(src.dayPutChgOi) : null,
+        callsChgOi: Number.isFinite(Number(src.callsChgOi)) ? Number(src.callsChgOi) : null,
+        putsChgOi: Number.isFinite(Number(src.putsChgOi)) ? Number(src.putsChgOi) : null,
+        callOiTotal: Number.isFinite(Number(src.callOiTotal)) ? Number(src.callOiTotal) : null,
+        putOiTotal: Number.isFinite(Number(src.putOiTotal)) ? Number(src.putOiTotal) : null,
+        diffInOi: Number.isFinite(Number(src.diffInOi)) ? Number(src.diffInOi) : bar.chngInDir ?? null,
+        dirOfChng: src.dirOfChng ?? null,
+        // Strike tops (chg + absolute labels)
+        topCallChgStrike: Number.isFinite(Number(src.topCallChgStrike))
+          ? Number(src.topCallChgStrike)
+          : bar.topCallStrike ?? null,
+        topPutChgStrike: Number.isFinite(Number(src.topPutChgStrike))
+          ? Number(src.topPutChgStrike)
+          : bar.topPutStrike ?? null,
+        topCallChgOi: Number.isFinite(Number(src.topCallChgOi)) ? Number(src.topCallChgOi) : null,
+        topPutChgOi: Number.isFinite(Number(src.topPutChgOi)) ? Number(src.topPutChgOi) : null,
+        dominantOi: Number.isFinite(Number(src.dominantOi)) ? Number(src.dominantOi) : null,
+        oiMigration: src.oiMigration ?? bar.oiMigration ?? null,
+        futPrice: Number.isFinite(Number(src.futPrice)) ? Number(src.futPrice) : null,
+      };
+    });
+    const rows = [...rowsAsc].reverse();
     const payload = {
       ok: true,
       dateKey: dk,
@@ -75,6 +111,7 @@ async function archiveDay(dateKey, { symbol = SYMBOL, force = false } = {}) {
       archivedAt: new Date().toISOString(),
       sourceMinuteCount: sourceRows.length,
       rowCount: rows.length,
+      schema: 'oi-flow-tape-v2',
       rows,
     };
     const json = JSON.stringify(payload);
@@ -96,6 +133,17 @@ async function archiveDay(dateKey, { symbol = SYMBOL, force = false } = {}) {
       },
       { upsert: true, returnDocument: 'after' },
     );
+
+    // Archive no longer needs per-strike blobs — drop them from live rows to cut DB size
+    // until next-day purge deletes the whole dateKey. Tracker uses day/interval totals.
+    try {
+      await OiFlowMinuteRow.updateMany(
+        { symbol, dateKey: dk },
+        { $unset: { strikes: 1 } },
+      );
+    } catch {
+      /* best-effort space save */
+    }
 
     return {
       ok: true,
@@ -180,6 +228,52 @@ async function getArchivePayload(dateKey, { symbol = SYMBOL } = {}) {
   };
 }
 
+/**
+ * Read-only day tape for OI Flow Tracker (archive JSON → table).
+ * Does not write to DB. Rows normalized for the tracker UI (spotPrice, ascending).
+ */
+async function getDayTapeForTracker(dateKey, { symbol = SYMBOL } = {}) {
+  const pack = await getArchivePayload(dateKey, { symbol });
+  if (!pack?.payload) return null;
+
+  const raw = Array.isArray(pack.payload.rows) ? pack.payload.rows : [];
+  const archiveStep = Number(pack.payload.intervalMin) || INTERVAL_MIN;
+  const { rows, oiSource } = hydrateArchiveRowsForTracker(
+    raw.map((r) => ({
+      ...r,
+      dateKey: r.dateKey || pack.dateKey,
+      symbol: r.symbol || symbol,
+    })),
+    { intervalMin: archiveStep },
+  );
+
+  const displayRow = rows.length ? { ...rows[rows.length - 1], isLastEntry: true, afterClose: true } : null;
+
+  return {
+    ok: true,
+    historical: true,
+    source: 'archive',
+    oiSource,
+    schema: pack.payload.schema || null,
+    dateKey: pack.dateKey,
+    symbol,
+    intervalMin: archiveStep,
+    rowCount: rows.length,
+    expectedRows: pack.payload.rowCount || rows.length,
+    archivedAt: pack.archivedAt,
+    byteSize: pack.byteSize,
+    running: false,
+    inSession: false,
+    isTradingDay: true,
+    weekendHold: false,
+    lastTime: displayRow?.time || null,
+    nowTime: null,
+    rows,
+    displayRow,
+    liveContext: null,
+  };
+}
+
 module.exports = {
   INTERVAL_MIN,
   archiveDay,
@@ -187,4 +281,5 @@ module.exports = {
   archiveBeforePurge,
   listArchivedMonth,
   getArchivePayload,
+  getDayTapeForTracker,
 };

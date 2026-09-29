@@ -65,6 +65,7 @@ const {
 const {
   getOiFlowStatus,
   getOiFlowToday,
+  getOiFlowDay,
   getOiFlowArchives,
   getOiFlowArchiveDownload,
   getOiFlowHeaderSignal,
@@ -150,6 +151,7 @@ router.post('/flow-scalp-prime/close', postFlowScalpPrimeClose);
 
 router.get('/oi-flow/status', getOiFlowStatus);
 router.get('/oi-flow/today', getOiFlowToday);
+router.get('/oi-flow/day/:dateKey', getOiFlowDay);
 router.get('/oi-flow/archives', getOiFlowArchives);
 router.get('/oi-flow/archives/:dateKey/download', getOiFlowArchiveDownload);
 router.get('/oi-flow/header-signal', getOiFlowHeaderSignal);

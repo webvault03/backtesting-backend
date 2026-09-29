@@ -111,6 +111,28 @@ const liveWalletSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.Mixed,
       default: null,
     },
+    /** OI + Candle Agree — 15m REAL agree · ATM · ladder +5…+30 · exit 15:15 · no SL. */
+    strategy17EngineSettings: {
+      symbol: { type: String, default: 'NIFTY' },
+      lotCount: { type: Number, default: 5 },
+      tradeFromTime: { type: String, default: '09:20' },
+      tradeToTime: { type: String, default: '14:00' },
+      eodExitTime: { type: String, default: '15:15' },
+      openCaptureFromTime: { type: String, default: '09:20' },
+      targetPoints: { type: Number, default: 30 },
+      stopLossPoints: { type: Number, default: null },
+      hasStopLoss: { type: Boolean, default: false },
+      proximityPoints: { type: Number, default: 25 },
+      strikeLookaround: { type: Number, default: 12 },
+      maxTradesPerDay: { type: Number, default: 1 },
+      cooldownMinutes: { type: Number, default: 2 },
+      perTradeCost: { type: Number, default: 100 },
+    },
+    /** Latest agree signal snapshot for UI (shape / pair / optionBuy). */
+    strategy17AgreeSignal: {
+      type: mongoose.Schema.Types.Mixed,
+      default: null,
+    },
     /** OI Flow Tracker paper (Put writing→CALL / Put buying→PUT). */
     oiFlowEngineSettings: {
       enabled: { type: Boolean, default: true },
