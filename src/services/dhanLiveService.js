@@ -192,10 +192,10 @@ async function fetchExpiryList(symbol) {
 
 const OPTION_CHAIN_MIN_INTERVAL_MS = 4000;
 const OPTION_CHAIN_STALE_MAX_AGE_MS = 5 * 60 * 1000;
-const OPTION_CHAIN_429_COOLDOWN_MS = 60 * 1000;
+const OPTION_CHAIN_429_COOLDOWN_MS = 90 * 1000;
 const OPTION_CHAIN_5XX_COOLDOWN_MS = 12 * 1000;
 /** When no warm cache exists, do not hard-block for the full cooldown — probe sooner. */
-const OPTION_CHAIN_EMPTY_CACHE_PROBE_MS = 8000;
+const OPTION_CHAIN_EMPTY_CACHE_PROBE_MS = 20000;
 const OPTION_CHAIN_HTTP_TIMEOUT_MS = 12000;
 const optionChainCache = new Map();
 const optionChainInflight = new Map();
@@ -206,7 +206,42 @@ function isHttpRateLimitError(error) {
   const status = Number(error?.response?.status);
   if (status === 429) return true;
   const msg = String(error?.message || error?.response?.data?.errorMessage || '');
-  return msg.includes('429') || /rate\s*limit/i.test(msg);
+  return msg.includes('429') || /rate\s*limit|Too many requests|805/i.test(msg);
+}
+
+/** Dhan sometimes returns HTTP 200 with {805:"Too many requests"} and no `oc`. */
+function isDhanRateLimitPayload(data) {
+  if (!data || typeof data !== 'object') return false;
+  if (data['805'] != null) return true;
+  const blob = JSON.stringify(data);
+  return /Too many requests|rate\s*limit/i.test(blob);
+}
+
+/**
+ * Normalize option-chain payload. Rejects empty / rate-limit bodies so we never
+ * cache `{}` and poison the OI Flow tracker with "oc empty".
+ */
+function normalizeOptionChainData(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  if (isDhanRateLimitPayload(raw)) return null;
+  const root = raw.oc && typeof raw.oc === 'object'
+    ? raw
+    : raw.data && raw.data.oc && typeof raw.data.oc === 'object'
+      ? raw.data
+      : null;
+  if (!root?.oc || typeof root.oc !== 'object') return null;
+  const ocKeys = Object.keys(root.oc);
+  if (!ocKeys.length) return null;
+  return {
+    last_price: root.last_price ?? raw.last_price ?? null,
+    oc: root.oc,
+  };
+}
+
+function makeRateLimitError(detail) {
+  const err = new Error(detail || 'Dhan option chain rate limited (429)');
+  err.response = { status: 429, data: { message: detail } };
+  return err;
 }
 
 function isTransientOptionChainError(error) {
@@ -241,12 +276,38 @@ async function fetchOptionChain({ symbol, expiry }) {
     'client-id': clientId,
     'Content-Type': 'application/json',
   };
+  const parseChainResponse = (resp) => {
+    const envelope = resp?.data;
+    const raw = envelope?.data !== undefined ? envelope.data : envelope;
+    if (isDhanRateLimitPayload(raw) || isDhanRateLimitPayload(envelope)) {
+      throw makeRateLimitError('Dhan option chain rate limited');
+    }
+    // Failed status with no strikes
+    if (
+      envelope
+      && String(envelope.status || '').toLowerCase() === 'failed'
+      && !normalizeOptionChainData(raw)
+    ) {
+      if (isDhanRateLimitPayload(envelope) || isDhanRateLimitPayload(raw)) {
+        throw makeRateLimitError('Dhan option chain rate limited');
+      }
+      throw new Error(
+        envelope.message || envelope.remarks || 'Dhan option chain request failed',
+      );
+    }
+    const normalized = normalizeOptionChainData(raw);
+    if (!normalized) {
+      throw new Error('Dhan option chain has no strike rows (oc empty)');
+    }
+    return normalized;
+  };
+
   try {
     const resp = await axios.post(`${DHAN_BASE}/optionchain`, body, {
       headers,
       timeout: OPTION_CHAIN_HTTP_TIMEOUT_MS,
     });
-    return resp.data?.data || {};
+    return parseChainResponse(resp);
   } catch (error) {
     if (isLikelyDhanAuthError(error)) {
       const renewed = await ensureValidDhanAccessToken('optionchain-data');
@@ -255,7 +316,7 @@ async function fetchOptionChain({ symbol, expiry }) {
         body,
         { headers: { ...headers, 'access-token': renewed }, timeout: OPTION_CHAIN_HTTP_TIMEOUT_MS }
       );
-      return retry.data?.data || {};
+      return parseChainResponse(retry);
     }
     throw error;
   }
@@ -296,6 +357,10 @@ async function fetchOptionChainCached({ symbol, expiry, allowStale = true } = {}
   const task = (async () => {
     try {
       const data = await fetchOptionChain({ symbol, expiry });
+      // Never cache empty / invalid chains (would poison every caller for MIN_INTERVAL).
+      if (!data?.oc || !Object.keys(data.oc).length) {
+        throw new Error('Dhan option chain has no strike rows (oc empty)');
+      }
       optionChainCache.set(key, { at: Date.now(), data });
       optionChainRateLimitedUntil = 0;
       return data;
@@ -305,15 +370,20 @@ async function fetchOptionChainCached({ symbol, expiry, allowStale = true } = {}
         optionChainRateLimitedUntil = Date.now() + OPTION_CHAIN_429_COOLDOWN_MS;
       } else if (isTransientOptionChainError(error)) {
         optionChainRateLimitedUntil = Date.now() + OPTION_CHAIN_5XX_COOLDOWN_MS;
+      } else if (/oc empty/i.test(String(error?.message || ''))) {
+        // Empty body often means soft rate-limit — cool down briefly.
+        optionChainRateLimitedUntil = Date.now() + Math.min(OPTION_CHAIN_429_COOLDOWN_MS, 30000);
       }
 
       if (
         allowStale
         && cached
+        && cached.data?.oc
+        && Object.keys(cached.data.oc).length
         && now - cached.at < OPTION_CHAIN_STALE_MAX_AGE_MS
-        && (isHttpRateLimitError(error) || isTransientOptionChainError(error))
+        && (isHttpRateLimitError(error) || isTransientOptionChainError(error) || /oc empty/i.test(String(error?.message || '')))
       ) {
-        // Keep board alive on Dhan blips (500 / timeout / 429).
+        // Keep board alive on Dhan blips (500 / timeout / 429 / empty).
         cached.stale = true;
         cached.staleReason = status ? `HTTP_${status}` : String(error.code || error.message || 'ERR');
         return cached.data;
@@ -339,9 +409,10 @@ function getOptionChainRateLimitStatus() {
 async function getNearestWeeklyExpiry(symbol) {
   const list = await fetchExpiryList(symbol);
   if (list.length === 0) return null;
-  // Dhan returns expiries as YYYY-MM-DD strings; sort ascending and pick first future expiry.
-  const today = new Date().toISOString().slice(0, 10);
-  const sorted = [...list].sort();
+  // Use IST calendar day — UTC date can be wrong near IST midnight.
+  const { getIstClock } = require('../utils/dateTime');
+  const today = getIstClock(new Date()).dateKey;
+  const sorted = [...list].map((e) => String(e).slice(0, 10)).sort();
   for (const expiry of sorted) {
     if (expiry >= today) return expiry;
   }

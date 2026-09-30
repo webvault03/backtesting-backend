@@ -268,8 +268,22 @@ async function captureMinute({ dateKey, minutes, forceRetry = false } = {}) {
     } catch (err) {
       lastErr = err;
       engineState.lastError = err.message;
+      // Don't burn Dhan quota with rapid retries while rate-limited / cooling down.
+      if (/rate\s*limit|429|cooling down|Too many requests|oc empty/i.test(String(err.message || ''))) {
+        break;
+      }
       if (attempt < MAX_RETRIES) await sleep(RETRY_DELAY_MS * attempt);
     }
+  }
+
+  const failedMsg = lastErr?.message || 'Fetch failed';
+  const softFail = /rate\s*limit|429|cooling down|Too many requests|oc empty/i.test(failedMsg);
+
+  // Soft / rate-limit failures: do not spam fetchOk:false rows (tracker hides them → empty table).
+  // Keep last good row in memory; retry next tick / next minute.
+  if (softFail) {
+    engineState.lastError = failedMsg;
+    return null;
   }
 
   const failed = {
@@ -294,7 +308,7 @@ async function captureMinute({ dateKey, minutes, forceRetry = false } = {}) {
     sentiment: null,
     expiry: engineState.expiry || null,
     fetchOk: false,
-    error: lastErr?.message || 'Fetch failed',
+    error: failedMsg,
     fetchedAt: new Date(),
   };
 
@@ -639,13 +653,13 @@ async function listTodayRows() {
     .sort({ minutes: -1 })
     .lean();
 
-  const lastRowFromDb = rows.find((r) => r.fetchOk) || rows[0] || null;
+  const lastGoodFromDb = rows.find((r) => r.fetchOk !== false) || null;
   let lastRow = weekendHold ? null : engineState.lastRow;
-  if (
-    lastRowFromDb
-    && (!lastRow?.minutes || lastRowFromDb.minutes >= lastRow.minutes)
-  ) {
-    lastRow = lastRowFromDb;
+  // Never let a failed in-memory/DB row hide successful captures (empty tracker UI).
+  if (!lastRow || lastRow.fetchOk === false) {
+    lastRow = lastGoodFromDb || rows[0] || null;
+  } else if (lastGoodFromDb && Number(lastGoodFromDb.minutes) > Number(lastRow.minutes)) {
+    lastRow = lastGoodFromDb;
   }
   const savedStrikes = await latestSavedStrikeNames(tapeDateKey);
   if (lastRow) lastRow = stripStrikes(lastRow);
