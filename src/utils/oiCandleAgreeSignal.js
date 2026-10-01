@@ -132,7 +132,8 @@ function mergeActsFromFlowBars(ohlcBars, minuteRows) {
   const byMin = new Map(flowBars.map((b) => [Number(b.minutes), b]));
   return ohlcBars.map((bar) => {
     if (bar.dominantPair && bar.dominantPair !== '—|—') return bar;
-    const fb = byMin.get(bar.endMin) || byMin.get(bar.entryMinutes);
+    // Flow bars are keyed by interval close (09:30 = 09:15→09:30); OHLC bar 09:15–09:29 closes at endMin + 1.
+    const fb = byMin.get(bar.endMin + 1);
     if (!fb?.callAct || !fb?.putAct) return bar;
     return {
       ...bar,

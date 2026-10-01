@@ -56,6 +56,7 @@ const TARGET_LADDER_PTS = [5, 10, 15, 20, 30];
 const DEFAULT_TARGET_POINTS = 30; // last ladder rung (settings / display only)
 const DEFAULT_PROXIMITY = 25;
 const DEFAULT_LOOKAROUND = 12;
+const OPEN_DOI_WAIT_MINUTES = 5;
 
 function buildTargetMilestones(entryPremium) {
   const entry = Number(entryPremium);
@@ -906,6 +907,13 @@ async function maybeCaptureOpenWalls(clock) {
       return;
     }
     const walls = buildWallsFromSnapshot(pack.snapshot);
+    // Day ΔOI is often all 0 in the first seconds after 09:15; wait up to 5 min for real ΔOI
+    // before locking absolute-OI fallback walls for the whole day.
+    const usedFallback = walls.some((w) => String(w.label || '').startsWith('abs_'));
+    if (usedFallback && clock.minutes < openCaptureMin() + OPEN_DOI_WAIT_MINUTES) {
+      logEntry('WALL_CAPTURE_WAIT_DOI', { ist: istClockLabel(clock), fut: pack.fut });
+      return;
+    }
     if (walls.length === 0) {
       logEntry('WALL_CAPTURE_EMPTY', { ist: istClockLabel(clock), fut: pack.fut });
       return;
