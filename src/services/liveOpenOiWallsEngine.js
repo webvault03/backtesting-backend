@@ -1,13 +1,15 @@
 /**
- * Strategy 16 (UI) — Open OI Walls paper live.
- * At ~09:15 capture absolute top Put (support) + Call (resistance) OI near Nifty spot.
- * When spot is within proximity of a wall → buy that strike (Put wall→CE, Call wall→PE).
+ * Strategy 16 (UI) — Open OI Walls paper live (ΔOI tops).
+ * At ~09:15 capture strongest |Put ΔOI| + |Call ΔOI| strikes in lookaround
+ * (near-spot flow tops — same rule as the Sep9+ ladder backtest).
+ * When spot is within proximity of a wall → buy that strike (Put→CE, Call→PE).
  * One entry stays open until 15:15. Milestone targets +5/+10/+15/+20/+30 are recorded
- * (HIT/MISSED) on that same trade — they do not close the position. No SL. Entry 09:15–10:45.
+ * (HIT/MISSED) on that same trade — they do not close the position. No SL. Entry 09:15–10:15.
  */
 
 const LivePaperTrade = require('../models/livePaperTrade');
 const LiveWallet = require('../models/liveWallet');
+const Strategy16OpenWallDay = require('../models/strategy16OpenWallDay');
 const { getIstClock, parseClockMinutes, isWeekendDateKey } = require('../utils/dateTime');
 const {
   ensureNseHolidaysLoaded,
@@ -46,7 +48,7 @@ const OI_REFRESH_MIN_GAP_MS = 5000;
 const FUT_PRICE_REFRESH_MIN_GAP_MS = 2000;
 
 const DEFAULT_TRADE_FROM = 555; // 09:15
-const DEFAULT_TRADE_TO = 645; // 10:45 morning entries
+const DEFAULT_TRADE_TO = 615; // 10:15 morning entries
 const DEFAULT_EOD = 915; // 15:15
 const DEFAULT_OPEN_CAPTURE = 555; // 09:15
 /** Fixed premium-point ladder — recorded on the open trade; never auto-exits. */
@@ -99,7 +101,7 @@ const engineState = {
     symbol: 'NIFTY',
     lotCount: 5,
     tradeFromTime: '09:15',
-    tradeToTime: '10:45',
+    tradeToTime: '10:15',
     eodExitTime: '15:15',
     openCaptureFromTime: '09:15',
     targetPoints: DEFAULT_TARGET_POINTS,
@@ -252,7 +254,7 @@ function normalizeSettings(settings = {}) {
     symbol: String(settings.symbol || 'NIFTY').toUpperCase(),
     lotCount,
     tradeFromTime: String(settings.tradeFromTime || '09:15'),
-    tradeToTime: String(settings.tradeToTime || '10:45'),
+    tradeToTime: String(settings.tradeToTime || '10:15'),
     eodExitTime: String(settings.eodExitTime || '15:15'),
     openCaptureFromTime: String(settings.openCaptureFromTime || settings.eodCaptureFromTime || '09:15'),
     targetPoints,
@@ -316,6 +318,35 @@ async function persistWatchlist(watchlist) {
     await wallet.save();
   } catch (err) {
     engineState.lastError = `Watchlist persist: ${err.message}`;
+  }
+  // Durable day archive — wallet can be cleared; backtests need this.
+  try {
+    if (watchlist?.captureDateKey && Array.isArray(watchlist.walls) && watchlist.walls.length) {
+      await Strategy16OpenWallDay.findOneAndUpdate(
+        { symbol: getEngineSymbol(), dateKey: String(watchlist.captureDateKey) },
+        {
+          $set: {
+            symbol: getEngineSymbol(),
+            dateKey: String(watchlist.captureDateKey),
+            capturedAt: watchlist.capturedAt ? new Date(watchlist.capturedAt) : new Date(),
+            captureMinutes: openCaptureMin(),
+            spotAtCapture: Number.isFinite(Number(watchlist.spotAtCapture))
+              ? Number(watchlist.spotAtCapture)
+              : null,
+            futAtCapture: Number.isFinite(Number(watchlist.futAtCapture))
+              ? Number(watchlist.futAtCapture)
+              : null,
+            expiry: watchlist.expiry || null,
+            lookaroundStrikes: Number(engineState.settings.strikeLookaround) || DEFAULT_LOOKAROUND,
+            walls: watchlist.walls,
+            source: 'live_engine',
+          },
+        },
+        { upsert: true, new: true, setDefaultsOnInsert: true },
+      );
+    }
+  } catch (err) {
+    engineState.lastError = `Wall day archive: ${err.message}`;
   }
 }
 
@@ -627,7 +658,8 @@ async function syncEngineTradeStateFromDb(clock) {
 }
 
 /**
- * Top 2 walls near Nifty spot: strongest Put OI (support → buy CE) + strongest Call OI (resistance → buy PE).
+ * At ~09:15: strongest |Put ΔOI| (→ buy CE) + strongest |Call ΔOI| (→ buy PE)
+ * inside the lookaround window. Matches the ΔOI-tops ladder backtest (near-spot flow).
  */
 function buildWallsFromSnapshot(snapshot) {
   const strikes = Array.isArray(snapshot?.strikes) ? snapshot.strikes : [];
@@ -636,30 +668,107 @@ function buildWallsFromSnapshot(snapshot) {
   for (const row of strikes) {
     const strike = Number(row.strike);
     if (!Number.isFinite(strike)) continue;
-    const putOi = Number(row.putOi);
-    const callOi = Number(row.callOi);
-    if (Number.isFinite(putOi) && putOi > 0 && (!bestPut || putOi > bestPut.oi)) {
-      bestPut = {
-        strike,
-        side: 'PUT',
-        oi: putOi,
-        optionType: 'CE',
-        label: 'support',
-      };
+    const putChg = Number(row.putChgOi);
+    const callChg = Number(row.callChgOi);
+    if (Number.isFinite(putChg) && putChg !== 0) {
+      const abs = Math.abs(putChg);
+      if (!bestPut || abs > bestPut.abs) {
+        bestPut = {
+          strike,
+          side: 'PUT',
+          oi: putChg,
+          abs,
+          optionType: 'CE',
+          label: 'doi_put_top',
+        };
+      }
     }
-    if (Number.isFinite(callOi) && callOi > 0 && (!bestCall || callOi > bestCall.oi)) {
-      bestCall = {
-        strike,
-        side: 'CALL',
-        oi: callOi,
-        optionType: 'PE',
-        label: 'resistance',
-      };
+    if (Number.isFinite(callChg) && callChg !== 0) {
+      const abs = Math.abs(callChg);
+      if (!bestCall || abs > bestCall.abs) {
+        bestCall = {
+          strike,
+          side: 'CALL',
+          oi: callChg,
+          abs,
+          optionType: 'PE',
+          label: 'doi_call_top',
+        };
+      }
+    }
+  }
+  // Fallback if day-chg missing at open: absolute OI so we still lock walls.
+  if (!bestPut || !bestCall) {
+    for (const row of strikes) {
+      const strike = Number(row.strike);
+      if (!Number.isFinite(strike)) continue;
+      const putOi = Number(row.putOi);
+      const callOi = Number(row.callOi);
+      if (
+        !bestPut
+        && Number.isFinite(putOi)
+        && putOi > 0
+      ) {
+        bestPut = {
+          strike,
+          side: 'PUT',
+          oi: putOi,
+          abs: putOi,
+          optionType: 'CE',
+          label: 'abs_put_fallback',
+        };
+      } else if (
+        bestPut?.label === 'abs_put_fallback'
+        && Number.isFinite(putOi)
+        && putOi > bestPut.oi
+      ) {
+        bestPut = {
+          strike,
+          side: 'PUT',
+          oi: putOi,
+          abs: putOi,
+          optionType: 'CE',
+          label: 'abs_put_fallback',
+        };
+      }
+      if (
+        !bestCall
+        && Number.isFinite(callOi)
+        && callOi > 0
+      ) {
+        bestCall = {
+          strike,
+          side: 'CALL',
+          oi: callOi,
+          abs: callOi,
+          optionType: 'PE',
+          label: 'abs_call_fallback',
+        };
+      } else if (
+        bestCall?.label === 'abs_call_fallback'
+        && Number.isFinite(callOi)
+        && callOi > bestCall.oi
+      ) {
+        bestCall = {
+          strike,
+          side: 'CALL',
+          oi: callOi,
+          abs: callOi,
+          optionType: 'PE',
+          label: 'abs_call_fallback',
+        };
+      }
     }
   }
   const walls = [];
-  if (bestPut) walls.push(bestPut);
-  if (bestCall) walls.push(bestCall);
+  if (bestPut) {
+    const { abs, ...rest } = bestPut;
+    walls.push(rest);
+  }
+  if (bestCall) {
+    const { abs, ...rest } = bestCall;
+    walls.push(rest);
+  }
   return walls;
 }
 
@@ -1541,6 +1650,10 @@ async function startEngine({ symbol = 'NIFTY', settings = {} } = {}) {
   engineState.lastError = null;
   logEntry('ENGINE_START', { symbol: getEngineSymbol(), settings: engineState.settings });
   try {
+    const wallet = await ensureWallet();
+    if (!engineState.watchlist) {
+      engineState.watchlist = loadWatchlistFromWallet(wallet);
+    }
     engineState.lotSize = await getCurrentLotSize(getEngineSymbol());
     const clock = getIstClock(new Date());
     await dedupeOpenTradesInDb(clock);

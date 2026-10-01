@@ -55,14 +55,6 @@ const {
   getManualOiFlowToday,
 } = require('../controllers/manualConsoleController');
 const {
-  getFlowScalpPrimeStatus,
-  getFlowScalpPrimeBook,
-  getFlowScalpPrimeTrades,
-  postFlowScalpPrimeEnabled,
-  patchFlowScalpPrimeSettings,
-  postFlowScalpPrimeClose,
-} = require('../controllers/flowScalpPrimeController');
-const {
   getOiFlowStatus,
   getOiFlowToday,
   getOiFlowDay,
@@ -141,13 +133,6 @@ router.get('/manual-console/trades', getManualTrades);
 router.get('/manual-console/actions', getManualActions);
 router.post('/manual-console/wallet/reset', postManualWalletReset);
 router.post('/manual-console/wallet/topup', postManualWalletTopup);
-
-router.get('/flow-scalp-prime/status', getFlowScalpPrimeStatus);
-router.get('/flow-scalp-prime/book', getFlowScalpPrimeBook);
-router.get('/flow-scalp-prime/trades', getFlowScalpPrimeTrades);
-router.post('/flow-scalp-prime/enabled', postFlowScalpPrimeEnabled);
-router.patch('/flow-scalp-prime/settings', patchFlowScalpPrimeSettings);
-router.post('/flow-scalp-prime/close', postFlowScalpPrimeClose);
 
 router.get('/oi-flow/status', getOiFlowStatus);
 router.get('/oi-flow/today', getOiFlowToday);

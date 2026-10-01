@@ -46,13 +46,6 @@ async function bootBackgroundServices() {
   }
 
   try {
-    const flowScalpPrime = require('./services/flowScalpPrimeEngine');
-    await flowScalpPrime.ensureEngineRunning();
-  } catch (err) {
-    console.warn('Flow Scalp Prime engine boot:', err.message);
-  }
-
-  try {
     const oiFlow = require('./services/oiFlowMinuteEngine');
     const boot = oiFlow.ensureEngineRunning();
     if (boot.ok) {

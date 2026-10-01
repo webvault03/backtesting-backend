@@ -9,7 +9,7 @@ const STRATEGY_SIX_SHORT_STRADDLE_LIVE_KEY = 'strategy6_short_straddle_next_day_
 const STRATEGY_FOURTEEN_EOD_OI_WALLS_LIVE_KEY = 'strategy14_eod_oi_walls_live';
 /** EOD OI Walls Spot — same walls logic, Nifty cash/index price (not FUT), default +15 / no SL. */
 const STRATEGY_FIFTEEN_EOD_OI_WALLS_SPOT_LIVE_KEY = 'strategy15_eod_oi_walls_spot_live';
-/** Open OI Walls — 09:15 absolute Put/Call OI near spot · CE/PE at that strike · +15 · no SL. */
+/** Open OI Walls — 09:15 |ΔOI| Put/Call tops · CE/PE at that strike · ladder · exit 15:15 · no SL. */
 const STRATEGY_SIXTEEN_OPEN_OI_WALLS_LIVE_KEY = 'strategy16_open_oi_walls_live';
 /** OI + Candle Agree — 15m REAL agree · ATM CE/PE · ladder +5…+30 · exit 15:15 · no SL. */
 const STRATEGY_SEVENTEEN_OI_CANDLE_AGREE_LIVE_KEY = 'strategy17_oi_candle_agree_live';
@@ -18,9 +18,6 @@ const MANUAL_CONSOLE_LIVE_KEY = 'manual_console_live';
 const MANUAL_STOCK_LIVE_KEY = 'manual_stock_live';
 /** OI Flow Tracker signal store key (paper auto-trade removed). */
 const OI_FLOW_TRACKER_LIVE_KEY = 'oi_flow_tracker_live';
-/** Flow Scalp Prime — live Bias scalp · +2/−3 · 15m after SL · day ₹ target default off. */
-const FLOW_SCALP_PRIME_LIVE_KEY = 'flow_scalp_prime_live';
-
 module.exports = {
   STRATEGY_SIX_KEY,
   STRATEGY_TWO_KEY,
@@ -32,5 +29,4 @@ module.exports = {
   MANUAL_CONSOLE_LIVE_KEY,
   MANUAL_STOCK_LIVE_KEY,
   OI_FLOW_TRACKER_LIVE_KEY,
-  FLOW_SCALP_PRIME_LIVE_KEY,
 };
