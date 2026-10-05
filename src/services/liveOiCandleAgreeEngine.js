@@ -3,8 +3,8 @@
  * Closed 15m bars: REAL agree only —
  *   Writing|Buying + bearish candle → PE BUY (ATM)
  *   Short cover|Writing + bullish candle → CE BUY (ATM)
- * One entry stays open until 15:15. Milestone targets +5/+10/+15/+20/+30 are recorded
- * (HIT/MISSED) on that same trade — they do not close the position. No SL.
+ * One entry. Trail rungs +20/+30/+40/+50/+70 arm a profit lock; retrace to lock → exit.
+ * No hard SL from entry. Day close 15:15 only if trail never arms.
  * Entry window default 09:20–14:00.
  */
 
@@ -29,6 +29,12 @@ const {
 } = require('./dhanLiveService');
 const { STRATEGY_SEVENTEEN_OI_CANDLE_AGREE_LIVE_KEY } = require('../strategies/keys');
 const { broadcastPaperLive } = require('./realtimeSocket');
+const {
+  TRAIL_RUNGS,
+  PEAK_TRAIL_GAP,
+  buildTrailMilestones,
+  applyTrailToMilestones,
+} = require('../utils/openOiWallsTrail');
 
 const STRATEGY_KEY = STRATEGY_SEVENTEEN_OI_CANDLE_AGREE_LIVE_KEY;
 
@@ -50,23 +56,13 @@ const FUT_PRICE_REFRESH_MIN_GAP_MS = 2000;
 const DEFAULT_TRADE_FROM = 560; // 09:20
 const DEFAULT_TRADE_TO = 840; // 14:00
 const DEFAULT_EOD = 915; // 15:15
-/** Fixed premium-point ladder — recorded on the open trade; never auto-exits. */
-const TARGET_LADDER_PTS = [5, 10, 15, 20, 30];
-const DEFAULT_TARGET_POINTS = 30; // last ladder rung (settings / display only)
+const DEFAULT_TARGET_POINTS = 70;
+const TRAIL_NOTE = `trail=+20→+10/+30→+20/+40→+25 then peak-${PEAK_TRAIL_GAP}`;
 const DEFAULT_PROXIMITY = 25;
 const DEFAULT_LOOKAROUND = 12;
 
 function buildTargetMilestones(entryPremium) {
-  const entry = Number(entryPremium);
-  if (!Number.isFinite(entry) || entry <= 0) return [];
-  return TARGET_LADDER_PTS.map((points) => ({
-    points,
-    premium: Number((entry + points).toFixed(2)),
-    status: 'PENDING',
-    hitAt: null,
-    hitPremium: null,
-    pnlAtHit: null,
-  }));
+  return buildTrailMilestones(entryPremium);
 }
 
 function nextPendingTargetPremium(milestones) {
@@ -81,6 +77,8 @@ function serializeMilestones(milestones) {
   if (!Array.isArray(milestones)) return [];
   return milestones.map((m) => ({
     points: Number(m.points) || 0,
+    lockPoints: m.lockPoints != null ? Number(m.lockPoints) : null,
+    role: m.role || 'trail_arm',
     premium: m.premium != null ? Number(m.premium) : null,
     status: String(m.status || 'PENDING').toUpperCase(),
     hitAt: m.hitAt || null,
@@ -409,6 +407,8 @@ function buildOpenPositionMark(trade, mark, clock) {
     source: mark.source,
     isLiveMark: mark.source === 'websocket' || mark.source === 'chain',
     unrealizedPnl: Number(unrealized.toFixed(2)),
+    trailLockPremium: trade.stopLossPremium != null ? Number(trade.stopLossPremium) : null,
+    trailPeakPremium: trade.highSinceEntry != null ? Number(trade.highSinceEntry) : null,
     at: new Date().toISOString(),
     ist: istClockLabel(clock),
   };
@@ -441,6 +441,7 @@ function cacheOpenTradeLite(trade) {
     investedAmount: Number(trade.investedAmount) || null,
     targetPremium: trade.targetPremium != null ? Number(trade.targetPremium) : null,
     stopLossPremium: trade.stopLossPremium != null ? Number(trade.stopLossPremium) : null,
+    highSinceEntry: trade.highSinceEntry != null ? Number(trade.highSinceEntry) : null,
     targetMilestones: serializeMilestones(trade.targetMilestones),
     status: 'OPEN',
   };
@@ -901,12 +902,13 @@ async function placeLongOption(clock, signal, spot) {
       charges: Number(charges.toFixed(2)),
       stopLossPremium: null,
       targetPremium: targetPremium != null ? Number(targetPremium.toFixed(2)) : null,
-      stopLossMode: null,
+      stopLossMode: 'POINTS',
       targetMode: 'POINTS',
       targetMilestones: milestones,
+      highSinceEntry: Number(entryPremium.toFixed(2)),
       legs: [{ optionType, entryPremium: Number(entryPremium.toFixed(2)) }],
       entryReason: `Buy ${optionType} ATM · ${signal.reason || 'AGREE'}`,
-      notes: `oi_candle_agree; priceSource=SPOT; atm=${strike}; shape=${signal.shape}; pair=${signal.pair}; dir=${signal.dir}; reason=${signal.reason}; barEnd=${barEndMin}; ladder=${TARGET_LADDER_PTS.join('/')}; exit=15:15; sl=off`,
+      notes: `oi_candle_agree; priceSource=SPOT; atm=${strike}; shape=${signal.shape}; pair=${signal.pair}; dir=${signal.dir}; reason=${signal.reason}; barEnd=${barEndMin}; ${TRAIL_NOTE}; sl=off; eod=15:15-if-unarmed`,
     });
 
     if (Number.isFinite(barEndMin)) {
@@ -1090,58 +1092,43 @@ async function onOptionTick({ ltp }) {
 
 async function recordTargetMilestoneHits(trade, optionLtp) {
   const ltp = Number(optionLtp);
-  if (!Number.isFinite(ltp) || ltp <= 0) return false;
-  let milestones = Array.isArray(trade.targetMilestones) ? trade.targetMilestones.map((m) => ({ ...m })) : [];
-  let seeded = false;
-  if (!milestones.length) {
-    milestones = buildTargetMilestones(trade.entryPremium);
-    if (!milestones.length) return false;
-    seeded = true;
+  if (!Number.isFinite(ltp) || ltp <= 0) return { changed: false, exit: false };
+  const applied = applyTrailToMilestones(trade, ltp);
+  if (applied.peakPremium != null) {
+    const prevHigh = Number(trade.highSinceEntry);
+    if (!Number.isFinite(prevHigh) || applied.peakPremium > prevHigh) {
+      trade.highSinceEntry = applied.peakPremium;
+      applied.changed = true;
+    }
   }
-
-  const entry = Number(trade.entryPremium) || 0;
-  const qty = Number(trade.qty) || 0;
-  const charges = Math.max(0, Number(trade.charges) || 0);
-  let changed = seeded;
-  const now = new Date();
-  const justHit = [];
-
-  milestones = milestones.map((m) => {
-    const status = String(m.status || 'PENDING').toUpperCase();
-    if (status === 'HIT' || status === 'MISSED') return { ...m, status };
-    const level = Number(m.premium);
-    if (!Number.isFinite(level) || ltp < level) return { ...m, status: status || 'PENDING' };
-    changed = true;
-    const hitRow = {
-      ...m,
-      status: 'HIT',
-      hitAt: now,
-      hitPremium: Number(ltp.toFixed(2)),
-      pnlAtHit: Number(((ltp - entry) * qty - charges).toFixed(2)),
-    };
-    justHit.push(hitRow.points);
-    return hitRow;
-  });
-
-  if (!changed) return false;
-
-  trade.targetMilestones = milestones;
-  trade.markModified('targetMilestones');
-  const nextPrem = nextPendingTargetPremium(milestones);
-  if (nextPrem != null) trade.targetPremium = nextPrem;
+  if (applied.changed) {
+    trade.targetMilestones = applied.milestones;
+    trade.markModified('targetMilestones');
+  }
+  if (applied.lockPremium != null && Number(trade.stopLossPremium) !== applied.lockPremium) {
+    trade.stopLossPremium = applied.lockPremium;
+    trade.stopLossMode = 'POINTS';
+    applied.changed = true;
+  }
+  if (applied.nextTarget != null) trade.targetPremium = applied.nextTarget;
   trade.targetMode = 'POINTS';
-  await trade.save();
-  cacheOpenTradeLite(trade);
-  publishLiveMarkSnapshot();
-  if (justHit.length) {
-    logEntry('TARGET_MILESTONE', {
+  if (applied.changed) {
+    await trade.save();
+    cacheOpenTradeLite(trade);
+    publishLiveMarkSnapshot();
+  }
+  if (applied.justHit?.length) {
+    logEntry('TRAIL_ARM', {
       tradeId: trade._id.toString(),
       optionLtp: ltp,
-      hit: justHit,
-      milestones: serializeMilestones(milestones),
+      hit: applied.justHit,
+      peakPts: applied.peakPts,
+      lockPts: applied.lockPts,
+      lockPremium: applied.lockPremium,
+      milestones: serializeMilestones(applied.milestones),
     });
   }
-  return true;
+  return applied;
 }
 
 function sealMissedMilestones(trade) {
@@ -1200,11 +1187,35 @@ async function checkOpenTrade({ preferTicks = false } = {}) {
   if (!Number.isFinite(optionLtp) || optionLtp <= 0) return;
   if (mark.source === 'entry' && !isEodExitTime(clock.minutes)) return;
 
-  // Record ladder hits — never close on target. Position runs to day close.
+  // Arm trail rungs from peak; cut if LTP falls back to the lock.
+  let trail = { exit: false };
   try {
-    await recordTargetMilestoneHits(trade, optionLtp);
+    trail = await recordTargetMilestoneHits(trade, optionLtp);
   } catch (err) {
-    engineState.lastError = `Milestone record: ${err.message}`;
+    engineState.lastError = `Trail record: ${err.message}`;
+  }
+
+  if (trail?.exit) {
+    const fresh = await LivePaperTrade.findById(engineState.openTradeId);
+    if (!fresh || fresh.exitTime) {
+      clearOpenTrade();
+      return;
+    }
+    const lockPx = Number(fresh.stopLossPremium);
+    const exitPx = Number.isFinite(lockPx) ? lockPx : optionLtp;
+    logEntry('TRAIL_EXIT', {
+      ist: istClockLabel(clock),
+      tradeId: fresh._id.toString(),
+      optionLtp,
+      lockPremium: lockPx,
+    });
+    await finalizeTrade(fresh, {
+      exitPremium: exitPx,
+      mark: { ...mark, optionLtp: exitPx },
+      reason: 'TRAIL',
+      forceChain: false,
+    });
+    return;
   }
 
   if (isEodExitTime(clock.minutes)) {
@@ -1263,7 +1274,7 @@ async function finalizeTrade(trade, { exitPremium, mark, reason, forceChain = fa
     const hitSummary = serializeMilestones(trade.targetMilestones)
       .map((m) => `+${m.points}:${m.status}`)
       .join(',');
-    trade.notes = [trade.notes, `exitMark=${markSource}; pnl=${Number(pnl.toFixed(2))}; ladder=${hitSummary}`]
+    trade.notes = [trade.notes, `exitMark=${markSource}; pnl=${Number(pnl.toFixed(2))}; trail=${hitSummary}`]
       .filter(Boolean)
       .join(' | ')
       .slice(0, 500);
@@ -1315,21 +1326,18 @@ function startPoll() {
   engineState.pollTimer = setInterval(tick, POLL_INTERVAL_MS);
 }
 
-function applyExitPointsFromEntry(trade) {
+function applyExitPointsFromEntry(trade, optionLtp = null) {
   const entry = Number(trade.entryPremium);
   if (!Number.isFinite(entry) || entry <= 0) return false;
-  let milestones = Array.isArray(trade.targetMilestones) ? trade.targetMilestones : [];
-  if (!milestones.length) {
-    milestones = buildTargetMilestones(entry);
-    trade.targetMilestones = milestones;
-    trade.markModified('targetMilestones');
-  }
-  const nextPrem = nextPendingTargetPremium(milestones);
-  trade.targetPremium = nextPrem;
+  const ltp = Number(optionLtp) || Number(trade.openPositionMark?.optionLtp) || Number(trade.highSinceEntry) || entry;
+  const applied = applyTrailToMilestones(trade, ltp);
+  trade.targetMilestones = applied.milestones;
+  trade.markModified('targetMilestones');
+  if (applied.peakPremium != null) trade.highSinceEntry = applied.peakPremium;
+  trade.targetPremium = applied.nextTarget;
   trade.targetMode = 'POINTS';
-  // OI + Candle Agree: no stop loss — position runs to day close.
-  trade.stopLossPremium = null;
-  trade.stopLossMode = null;
+  trade.stopLossPremium = applied.lockPremium;
+  trade.stopLossMode = applied.lockPremium != null ? 'POINTS' : null;
   return true;
 }
 
@@ -1341,18 +1349,21 @@ async function reapplyExitPointsToOpenTrade({ reason = 'SETTINGS' } = {}) {
     targetPremium: trade.targetPremium,
     stopLossPremium: trade.stopLossPremium,
     milestoneCount: Array.isArray(trade.targetMilestones) ? trade.targetMilestones.length : 0,
+    firstRung: Array.isArray(trade.targetMilestones) ? trade.targetMilestones[0]?.points : null,
   };
   if (!applyExitPointsFromEntry(trade)) return { ok: true, updated: 0 };
   const sameTarget = Number(before.targetPremium) === Number(trade.targetPremium);
   const sameSl =
     (before.stopLossPremium == null && trade.stopLossPremium == null)
     || Number(before.stopLossPremium) === Number(trade.stopLossPremium);
-  const sameLadder = before.milestoneCount === (Array.isArray(trade.targetMilestones) ? trade.targetMilestones.length : 0);
+  const sameLadder =
+    before.milestoneCount === (Array.isArray(trade.targetMilestones) ? trade.targetMilestones.length : 0)
+    && Number(before.firstRung) === Number(trade.targetMilestones?.[0]?.points);
   if (sameTarget && sameSl && sameLadder && before.milestoneCount > 0) {
     cacheOpenTradeLite(trade);
     return { ok: true, updated: 0 };
   }
-  const noteBit = `exits_reapplied=${reason}; ladder=${TARGET_LADDER_PTS.join('/')}; sl=off`;
+  const noteBit = `exits_reapplied=${reason}; ${TRAIL_NOTE}; sl=off`;
   trade.notes = [trade.notes, noteBit].filter(Boolean).join(' | ').slice(0, 500);
   await trade.save();
   cacheOpenTradeLite(trade);
@@ -1514,7 +1525,11 @@ function getEngineSnapshot() {
     startedAt: engineState.startedAt,
     lotSize: engineState.lotSize,
     expiry: engineState.expiry,
-    settings: engineState.settings,
+    settings: {
+      ...engineState.settings,
+      trailRungs: TRAIL_RUNGS,
+      trailPeakGap: PEAK_TRAIL_GAP,
+    },
     priceSource: 'SPOT',
     lastFut: engineState.lastFut,
     lastSpot: engineState.lastFut ?? engineState.lastSpot,
