@@ -1,0 +1,708 @@
+[
+  {
+    "days": [
+      {
+        "day": "2026-09-09",
+        "trades": [
+          {
+            "dir": "LONG",
+            "kind": "breakout",
+            "anchorTime": "10:15",
+            "entryTime": "10:20",
+            "entryPx": 23729,
+            "slDist": 10,
+            "exitTime": "10:24",
+            "exitPx": 23759,
+            "reason": "TGT",
+            "gross": 30,
+            "pts": 29.5,
+            "exitMin": 624,
+            "sameBarBoth": false
+          }
+        ],
+        "pts": 29.5,
+        "hitTarget": true
+      },
+      {
+        "day": "2026-09-10",
+        "trades": [
+          {
+            "dir": "SHORT",
+            "kind": "bounce",
+            "anchorTime": "10:45",
+            "entryTime": "10:51",
+            "entryPx": 23624.95,
+            "slDist": 10,
+            "exitTime": "11:12",
+            "exitPx": 23634.95,
+            "reason": "SL",
+            "gross": -10,
+            "pts": -10.5,
+            "exitMin": 672,
+            "sameBarBoth": false
+          }
+        ],
+        "pts": -10.5,
+        "hitTarget": false
+      },
+      {
+        "day": "2026-09-11",
+        "trades": [
+          {
+            "dir": "LONG",
+            "kind": "bounce",
+            "anchorTime": "11:05",
+            "entryTime": "11:10",
+            "entryPx": 23463.85,
+            "slDist": 10,
+            "exitTime": "11:13",
+            "exitPx": 23493.85,
+            "reason": "TGT",
+            "gross": 30,
+            "pts": 29.5,
+            "exitMin": 673,
+            "sameBarBoth": false
+          }
+        ],
+        "pts": 29.5,
+        "hitTarget": true
+      },
+      {
+        "day": "2026-09-15",
+        "trades": [
+          {
+            "dir": "SHORT",
+            "kind": "breakout",
+            "anchorTime": "10:40",
+            "entryTime": "10:46",
+            "entryPx": 23479.95,
+            "slDist": 10,
+            "exitTime": "11:03",
+            "exitPx": 23489.95,
+            "reason": "SL",
+            "gross": -10,
+            "pts": -10.5,
+            "exitMin": 663,
+            "sameBarBoth": false
+          }
+        ],
+        "pts": -10.5,
+        "hitTarget": false
+      },
+      {
+        "day": "2026-09-16",
+        "trades": [],
+        "pts": 0,
+        "hitTarget": false
+      },
+      {
+        "day": "2026-09-17",
+        "trades": [
+          {
+            "dir": "SHORT",
+            "kind": "breakout",
+            "anchorTime": "10:40",
+            "entryTime": "10:45",
+            "entryPx": 23407.85,
+            "slDist": 10,
+            "exitTime": "10:57",
+            "exitPx": 23417.85,
+            "reason": "SL",
+            "gross": -10,
+            "pts": -10.5,
+            "exitMin": 657,
+            "sameBarBoth": false
+          }
+        ],
+        "pts": -10.5,
+        "hitTarget": false
+      },
+      {
+        "day": "2026-09-18",
+        "trades": [
+          {
+            "dir": "SHORT",
+            "kind": "breakout",
+            "anchorTime": "10:20",
+            "entryTime": "10:26",
+            "entryPx": 23439.95,
+            "slDist": 10,
+            "exitTime": "11:52",
+            "exitPx": 23449.95,
+            "reason": "SL",
+            "gross": -10,
+            "pts": -10.5,
+            "exitMin": 712,
+            "sameBarBoth": false
+          }
+        ],
+        "pts": -10.5,
+        "hitTarget": false
+      },
+      {
+        "day": "2026-09-21",
+        "trades": [],
+        "pts": 0,
+        "hitTarget": false
+      },
+      {
+        "day": "2026-09-22",
+        "trades": [
+          {
+            "dir": "SHORT",
+            "kind": "breakout",
+            "anchorTime": "10:25",
+            "entryTime": "10:30",
+            "entryPx": 23540.65,
+            "slDist": 10,
+            "exitTime": "10:41",
+            "exitPx": 23510.65,
+            "reason": "TGT",
+            "gross": 30,
+            "pts": 29.5,
+            "exitMin": 641,
+            "sameBarBoth": false
+          }
+        ],
+        "pts": 29.5,
+        "hitTarget": true
+      },
+      {
+        "day": "2026-09-23",
+        "trades": [
+          {
+            "dir": "LONG",
+            "kind": "breakout",
+            "anchorTime": "10:15",
+            "entryTime": "10:20",
+            "entryPx": 23519.5,
+            "slDist": 10,
+            "exitTime": "10:25",
+            "exitPx": 23509.5,
+            "reason": "SL",
+            "gross": -10,
+            "pts": -10.5,
+            "exitMin": 625,
+            "sameBarBoth": false
+          }
+        ],
+        "pts": -10.5,
+        "hitTarget": false
+      },
+      {
+        "day": "2026-09-24",
+        "trades": [
+          {
+            "dir": "SHORT",
+            "kind": "bounce",
+            "anchorTime": "10:10",
+            "entryTime": "10:15",
+            "entryPx": 23321.45,
+            "slDist": 10,
+            "exitTime": "10:20",
+            "exitPx": 23331.45,
+            "reason": "SL",
+            "gross": -10,
+            "pts": -10.5,
+            "exitMin": 620,
+            "sameBarBoth": false
+          }
+        ],
+        "pts": -10.5,
+        "hitTarget": false
+      },
+      {
+        "day": "2026-09-25",
+        "trades": [
+          {
+            "dir": "SHORT",
+            "kind": "breakout",
+            "anchorTime": "10:30",
+            "entryTime": "10:35",
+            "entryPx": 23183.95,
+            "slDist": 10,
+            "exitTime": "10:39",
+            "exitPx": 23193.95,
+            "reason": "SL",
+            "gross": -10,
+            "pts": -10.5,
+            "exitMin": 639,
+            "sameBarBoth": false
+          }
+        ],
+        "pts": -10.5,
+        "hitTarget": false
+      },
+      {
+        "day": "2026-09-28",
+        "trades": [
+          {
+            "dir": "SHORT",
+            "kind": "bounce",
+            "anchorTime": "11:00",
+            "entryTime": "11:10",
+            "entryPx": 22949.95,
+            "slDist": 10,
+            "exitTime": "11:30",
+            "exitPx": 22959.95,
+            "reason": "SL",
+            "gross": -10,
+            "pts": -10.5,
+            "exitMin": 690,
+            "sameBarBoth": false
+          }
+        ],
+        "pts": -10.5,
+        "hitTarget": false
+      },
+      {
+        "day": "2026-09-29",
+        "trades": [
+          {
+            "dir": "SHORT",
+            "kind": "bounce",
+            "anchorTime": "11:00",
+            "entryTime": "11:05",
+            "entryPx": 22750.95,
+            "slDist": 10,
+            "exitTime": "11:07",
+            "exitPx": 22760.95,
+            "reason": "SL",
+            "gross": -10,
+            "pts": -10.5,
+            "exitMin": 667,
+            "sameBarBoth": false
+          }
+        ],
+        "pts": -10.5,
+        "hitTarget": false
+      },
+      {
+        "day": "2026-09-30",
+        "trades": [
+          {
+            "dir": "SHORT",
+            "kind": "breakout",
+            "anchorTime": "10:30",
+            "entryTime": "10:35",
+            "entryPx": 22821.25,
+            "slDist": 10,
+            "exitTime": "10:36",
+            "exitPx": 22831.25,
+            "reason": "SL",
+            "gross": -10,
+            "pts": -10.5,
+            "exitMin": 636,
+            "sameBarBoth": false
+          }
+        ],
+        "pts": -10.5,
+        "hitTarget": false
+      },
+      {
+        "day": "2026-10-01",
+        "trades": [],
+        "pts": 0,
+        "hitTarget": false
+      },
+      {
+        "day": "2026-10-05",
+        "trades": [
+          {
+            "dir": "SHORT",
+            "kind": "breakout",
+            "anchorTime": "10:20",
+            "entryTime": "10:25",
+            "entryPx": 22623.95,
+            "slDist": 10,
+            "exitTime": "10:26",
+            "exitPx": 22593.95,
+            "reason": "TGT",
+            "gross": 30,
+            "pts": 29.5,
+            "exitMin": 626,
+            "sameBarBoth": false
+          }
+        ],
+        "pts": 29.5,
+        "hitTarget": true
+      },
+      {
+        "day": "2026-10-06",
+        "trades": [],
+        "pts": 0,
+        "hitTarget": false
+      }
+    ],
+    "summary": {
+      "cfg": "tf5 oi=none maxTrades=1 tgt30/sl10 ohlc",
+      "days": 18,
+      "tradeDays": 14,
+      "daysTargetHit": 4,
+      "greenDays": 4,
+      "redDays": 10,
+      "trades": 14,
+      "winRate": 28.57,
+      "totalPts": 13,
+      "avgPtsPerDay": 0.72,
+      "maxDdPts": 65,
+      "pnlRs": 845,
+      "sameBarBoth": 0,
+      "eodExits": 0,
+      "avgSl": 10
+    }
+  },
+  {
+    "days": [
+      {
+        "day": "2026-09-09",
+        "trades": [
+          {
+            "dir": "LONG",
+            "kind": "breakout",
+            "anchorTime": "10:15",
+            "entryTime": "10:20",
+            "entryPx": 23729,
+            "slDist": 10,
+            "exitTime": "10:24",
+            "exitPx": 23759,
+            "reason": "TGT",
+            "gross": 30,
+            "pts": 29.5,
+            "exitMin": 624,
+            "sameBarBoth": false
+          }
+        ],
+        "pts": 29.5,
+        "hitTarget": true
+      },
+      {
+        "day": "2026-09-10",
+        "trades": [
+          {
+            "dir": "SHORT",
+            "kind": "bounce",
+            "anchorTime": "10:45",
+            "entryTime": "10:51",
+            "entryPx": 23624.95,
+            "slDist": 10,
+            "exitTime": "11:12",
+            "exitPx": 23634.95,
+            "reason": "SL",
+            "gross": -10,
+            "pts": -10.5,
+            "exitMin": 672,
+            "sameBarBoth": false
+          }
+        ],
+        "pts": -10.5,
+        "hitTarget": false
+      },
+      {
+        "day": "2026-09-11",
+        "trades": [
+          {
+            "dir": "LONG",
+            "kind": "bounce",
+            "anchorTime": "11:05",
+            "entryTime": "11:10",
+            "entryPx": 23463.85,
+            "slDist": 10,
+            "exitTime": "11:13",
+            "exitPx": 23493.85,
+            "reason": "TGT",
+            "gross": 30,
+            "pts": 29.5,
+            "exitMin": 673,
+            "sameBarBoth": false
+          }
+        ],
+        "pts": 29.5,
+        "hitTarget": true
+      },
+      {
+        "day": "2026-09-15",
+        "trades": [
+          {
+            "dir": "SHORT",
+            "kind": "breakout",
+            "anchorTime": "10:40",
+            "entryTime": "10:46",
+            "entryPx": 23479.95,
+            "slDist": 10,
+            "exitTime": "11:03",
+            "exitPx": 23489.95,
+            "reason": "SL",
+            "gross": -10,
+            "pts": -10.5,
+            "exitMin": 663,
+            "sameBarBoth": false
+          }
+        ],
+        "pts": -10.5,
+        "hitTarget": false
+      },
+      {
+        "day": "2026-09-16",
+        "trades": [],
+        "pts": 0,
+        "hitTarget": false
+      },
+      {
+        "day": "2026-09-17",
+        "trades": [
+          {
+            "dir": "SHORT",
+            "kind": "breakout",
+            "anchorTime": "10:40",
+            "entryTime": "10:45",
+            "entryPx": 23407.85,
+            "slDist": 10,
+            "exitTime": "10:57",
+            "exitPx": 23417.85,
+            "reason": "SL",
+            "gross": -10,
+            "pts": -10.5,
+            "exitMin": 657,
+            "sameBarBoth": false
+          }
+        ],
+        "pts": -10.5,
+        "hitTarget": false
+      },
+      {
+        "day": "2026-09-18",
+        "trades": [
+          {
+            "dir": "SHORT",
+            "kind": "breakout",
+            "anchorTime": "10:20",
+            "entryTime": "10:26",
+            "entryPx": 23439.95,
+            "slDist": 10,
+            "exitTime": "11:52",
+            "exitPx": 23449.95,
+            "reason": "SL",
+            "gross": -10,
+            "pts": -10.5,
+            "exitMin": 712,
+            "sameBarBoth": false
+          }
+        ],
+        "pts": -10.5,
+        "hitTarget": false
+      },
+      {
+        "day": "2026-09-21",
+        "trades": [],
+        "pts": 0,
+        "hitTarget": false
+      },
+      {
+        "day": "2026-09-22",
+        "trades": [
+          {
+            "dir": "SHORT",
+            "kind": "breakout",
+            "anchorTime": "10:25",
+            "entryTime": "10:30",
+            "entryPx": 23540.65,
+            "slDist": 10,
+            "exitTime": "10:41",
+            "exitPx": 23510.65,
+            "reason": "TGT",
+            "gross": 30,
+            "pts": 29.5,
+            "exitMin": 641,
+            "sameBarBoth": false
+          }
+        ],
+        "pts": 29.5,
+        "hitTarget": true
+      },
+      {
+        "day": "2026-09-23",
+        "trades": [
+          {
+            "dir": "LONG",
+            "kind": "breakout",
+            "anchorTime": "10:15",
+            "entryTime": "10:20",
+            "entryPx": 23519.5,
+            "slDist": 10,
+            "exitTime": "10:25",
+            "exitPx": 23509.5,
+            "reason": "SL",
+            "gross": -10,
+            "pts": -10.5,
+            "exitMin": 625,
+            "sameBarBoth": false
+          }
+        ],
+        "pts": -10.5,
+        "hitTarget": false
+      },
+      {
+        "day": "2026-09-24",
+        "trades": [
+          {
+            "dir": "SHORT",
+            "kind": "bounce",
+            "anchorTime": "10:10",
+            "entryTime": "10:15",
+            "entryPx": 23321.45,
+            "slDist": 10,
+            "exitTime": "10:20",
+            "exitPx": 23331.45,
+            "reason": "SL",
+            "gross": -10,
+            "pts": -10.5,
+            "exitMin": 620,
+            "sameBarBoth": false
+          }
+        ],
+        "pts": -10.5,
+        "hitTarget": false
+      },
+      {
+        "day": "2026-09-25",
+        "trades": [
+          {
+            "dir": "SHORT",
+            "kind": "breakout",
+            "anchorTime": "10:30",
+            "entryTime": "10:35",
+            "entryPx": 23183.95,
+            "slDist": 10,
+            "exitTime": "10:39",
+            "exitPx": 23193.95,
+            "reason": "SL",
+            "gross": -10,
+            "pts": -10.5,
+            "exitMin": 639,
+            "sameBarBoth": false
+          }
+        ],
+        "pts": -10.5,
+        "hitTarget": false
+      },
+      {
+        "day": "2026-09-28",
+        "trades": [
+          {
+            "dir": "SHORT",
+            "kind": "bounce",
+            "anchorTime": "11:00",
+            "entryTime": "11:10",
+            "entryPx": 22949.95,
+            "slDist": 10,
+            "exitTime": "11:30",
+            "exitPx": 22959.95,
+            "reason": "SL",
+            "gross": -10,
+            "pts": -10.5,
+            "exitMin": 690,
+            "sameBarBoth": false
+          }
+        ],
+        "pts": -10.5,
+        "hitTarget": false
+      },
+      {
+        "day": "2026-09-29",
+        "trades": [
+          {
+            "dir": "SHORT",
+            "kind": "bounce",
+            "anchorTime": "11:00",
+            "entryTime": "11:05",
+            "entryPx": 22750.95,
+            "slDist": 10,
+            "exitTime": "11:07",
+            "exitPx": 22760.95,
+            "reason": "SL",
+            "gross": -10,
+            "pts": -10.5,
+            "exitMin": 667,
+            "sameBarBoth": false
+          }
+        ],
+        "pts": -10.5,
+        "hitTarget": false
+      },
+      {
+        "day": "2026-09-30",
+        "trades": [
+          {
+            "dir": "SHORT",
+            "kind": "breakout",
+            "anchorTime": "10:30",
+            "entryTime": "10:35",
+            "entryPx": 22821.25,
+            "slDist": 10,
+            "exitTime": "10:36",
+            "exitPx": 22831.25,
+            "reason": "SL",
+            "gross": -10,
+            "pts": -10.5,
+            "exitMin": 636,
+            "sameBarBoth": false
+          }
+        ],
+        "pts": -10.5,
+        "hitTarget": false
+      },
+      {
+        "day": "2026-10-01",
+        "trades": [],
+        "pts": 0,
+        "hitTarget": false
+      },
+      {
+        "day": "2026-10-05",
+        "trades": [
+          {
+            "dir": "SHORT",
+            "kind": "breakout",
+            "anchorTime": "10:20",
+            "entryTime": "10:25",
+            "entryPx": 22623.95,
+            "slDist": 10,
+            "exitTime": "10:26",
+            "exitPx": 22593.95,
+            "reason": "TGT",
+            "gross": 30,
+            "pts": 29.5,
+            "exitMin": 626,
+            "sameBarBoth": false
+          }
+        ],
+        "pts": 29.5,
+        "hitTarget": true
+      },
+      {
+        "day": "2026-10-06",
+        "trades": [],
+        "pts": 0,
+        "hitTarget": false
+      }
+    ],
+    "summary": {
+      "cfg": "tf5 oi=none maxTrades=1 tgt30/sl10 worst",
+      "days": 18,
+      "tradeDays": 14,
+      "daysTargetHit": 4,
+      "greenDays": 4,
+      "redDays": 10,
+      "trades": 14,
+      "winRate": 28.57,
+      "totalPts": 13,
+      "avgPtsPerDay": 0.72,
+      "maxDdPts": 65,
+      "pnlRs": 845,
+      "sameBarBoth": 0,
+      "eodExits": 0,
+      "avgSl": 10
+    }
+  }
+]

@@ -89,13 +89,17 @@ const liveWalletSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.Mixed,
       default: null,
     },
-    /** Open OI Walls — 09:15 absolute Put/Call OI · ladder +5…+30 · exit 15:15 · no SL. */
+    /** Open OI Walls — 09:15 ΔOI walls · profit trail · until +20: SL 80 pts + exit 11:30 · else 15:15. */
     strategy16EngineSettings: {
       symbol: { type: String, default: 'NIFTY' },
       lotCount: { type: Number, default: 5 },
       tradeFromTime: { type: String, default: '09:15' },
       tradeToTime: { type: String, default: '10:15' },
       eodExitTime: { type: String, default: '15:15' },
+      /** '' = off. */
+      unarmedExitTime: { type: String, default: '11:30' },
+      /** 0 = off. */
+      emergencySlPoints: { type: Number, default: 80 },
       openCaptureFromTime: { type: String, default: '09:15' },
       targetPoints: { type: Number, default: 30 },
       stopLossPoints: { type: Number, default: null },

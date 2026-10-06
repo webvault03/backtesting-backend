@@ -4,7 +4,8 @@
  * (near-spot flow tops — same rule as the Sep9+ ladder backtest).
  * When spot is within proximity of a wall → buy that strike (Put→CE, Call→PE).
  * One entry. Trail rungs +20/+30/+40/+50/+70 arm a profit lock; retrace to lock → exit.
- * No hard SL from entry. Day close 15:15 only if trail never arms. Entry 09:15–10:15.
+ * Until the trail arms (+20): emergency SL 80 pts from entry, and exit at 11:30.
+ * Once armed, only the trail (or 15:15) closes the trade. Entry 09:15–10:15.
  */
 
 const LivePaperTrade = require('../models/livePaperTrade');
@@ -33,6 +34,7 @@ const {
   PEAK_TRAIL_GAP,
   buildTrailMilestones,
   applyTrailToMilestones,
+  computeTrailLockPoints,
 } = require('../utils/openOiWallsTrail');
 
 const STRATEGY_KEY = STRATEGY_SIXTEEN_OPEN_OI_WALLS_LIVE_KEY;
@@ -56,6 +58,8 @@ const FUT_PRICE_REFRESH_MIN_GAP_MS = 2000;
 const DEFAULT_TRADE_FROM = 555; // 09:15
 const DEFAULT_TRADE_TO = 615; // 10:15 morning entries
 const DEFAULT_EOD = 915; // 15:15
+const DEFAULT_UNARMED_EXIT_TIME = '11:30';
+const DEFAULT_EMERGENCY_SL_POINTS = 80;
 const DEFAULT_OPEN_CAPTURE = 555; // 09:15
 const DEFAULT_TARGET_POINTS = 70;
 const DEFAULT_PROXIMITY = 25;
@@ -101,6 +105,8 @@ const engineState = {
     tradeFromTime: '09:15',
     tradeToTime: '10:15',
     eodExitTime: '15:15',
+    unarmedExitTime: DEFAULT_UNARMED_EXIT_TIME,
+    emergencySlPoints: DEFAULT_EMERGENCY_SL_POINTS,
     openCaptureFromTime: '09:15',
     targetPoints: DEFAULT_TARGET_POINTS,
     stopLossPoints: null,
@@ -248,12 +254,31 @@ function normalizeSettings(settings = {}) {
       ? Number(settings.perTradeCost)
       : 100;
 
+  // '' / 'off' disables; missing → default.
+  const unarmedRaw = settings.unarmedExitTime;
+  const unarmedExitTime =
+    unarmedRaw === undefined || unarmedRaw === null
+      ? DEFAULT_UNARMED_EXIT_TIME
+      : /^\d{1,2}:\d{2}$/.test(String(unarmedRaw).trim())
+        ? String(unarmedRaw).trim()
+        : '';
+  const slRawE = settings.emergencySlPoints;
+  const slNum = Number(slRawE);
+  const emergencySlPoints =
+    slRawE === undefined || slRawE === null
+      ? DEFAULT_EMERGENCY_SL_POINTS
+      : Number.isFinite(slNum) && slNum > 0
+        ? Math.min(500, slNum)
+        : 0;
+
   return {
     symbol: String(settings.symbol || 'NIFTY').toUpperCase(),
     lotCount,
     tradeFromTime: String(settings.tradeFromTime || '09:15'),
     tradeToTime: String(settings.tradeToTime || '10:15'),
     eodExitTime: String(settings.eodExitTime || '15:15'),
+    unarmedExitTime,
+    emergencySlPoints,
     openCaptureFromTime: String(settings.openCaptureFromTime || settings.eodCaptureFromTime || '09:15'),
     targetPoints,
     stopLossPoints,
@@ -284,6 +309,33 @@ function openCaptureMin() {
 
 function isEodExitTime(minutes) {
   return Number(minutes) >= eodExitMin();
+}
+
+function unarmedExitMin() {
+  const t = String(engineState.settings.unarmedExitTime || '');
+  return t ? parseClockMinutes(t, null) : null;
+}
+
+function isUnarmedExitTime(minutes) {
+  const m = unarmedExitMin();
+  return Number.isFinite(m) && Number(minutes) >= m;
+}
+
+function emergencySlPoints() {
+  const n = Number(engineState.settings.emergencySlPoints);
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+
+function isTrailArmed(trade, optionLtp) {
+  const entry = Number(trade.entryPremium);
+  const peak = Math.max(Number(trade.highSinceEntry) || 0, Number(optionLtp) || 0);
+  return Number.isFinite(entry) && computeTrailLockPoints(peak - entry) != null;
+}
+
+function exitRulesNote() {
+  const sl = emergencySlPoints();
+  const t = engineState.settings.unarmedExitTime;
+  return `sl=${sl ? `${sl}pts-until-armed` : 'off'}; unarmedExit=${t || 'off'}; eod=${engineState.settings.eodExitTime}`;
 }
 
 function tradeOptionType(trade) {
@@ -1250,7 +1302,7 @@ async function placeLongOption(clock, risingWall, spot) {
       highSinceEntry: Number(entryPremium.toFixed(2)),
       legs: [{ optionType, entryPremium: Number(entryPremium.toFixed(2)) }],
       entryReason: `Buy ${optionType} · Open wall ${strike} · ${wall.side}`,
-      notes: `open_oi_walls; priceSource=SPOT; wall=${strike}; side=${wall.side}; oi=${wall.eodOi ?? wall.liveOi}; capture=${engineState.watchlist?.captureDateKey}; trail=+20→+10/+30→+20/+40→+25 then peak-${PEAK_TRAIL_GAP}; sl=off; eod=15:15-if-unarmed`,
+      notes: `open_oi_walls; priceSource=SPOT; wall=${strike}; side=${wall.side}; oi=${wall.eodOi ?? wall.liveOi}; capture=${engineState.watchlist?.captureDateKey}; trail=+20→+10/+30→+20/+40→+25 then peak-${PEAK_TRAIL_GAP}; ${exitRulesNote()}`,
     });
 
     engineState.openTradeId = tradeDoc._id.toString();
@@ -1455,7 +1507,8 @@ async function checkOpenTrade({ preferTicks = false } = {}) {
 
   const optionLtp = Number(mark.optionLtp);
   if (!Number.isFinite(optionLtp) || optionLtp <= 0) return;
-  if (mark.source === 'entry' && !isEodExitTime(clock.minutes)) return;
+  const unarmedTimeUp = isUnarmedExitTime(clock.minutes) && !isTrailArmed(trade, optionLtp);
+  if (mark.source === 'entry' && !isEodExitTime(clock.minutes) && !unarmedTimeUp) return;
 
   // Arm trail rungs from peak; cut if LTP falls back to the lock.
   let trail = { exit: false };
@@ -1488,17 +1541,49 @@ async function checkOpenTrade({ preferTicks = false } = {}) {
     return;
   }
 
-  if (isEodExitTime(clock.minutes)) {
+  if (mark.source !== 'entry' && !isTrailArmed(trade, optionLtp)) {
+    const slPts = emergencySlPoints();
+    const entry = Number(trade.entryPremium);
+    const slHit = slPts != null && Number.isFinite(entry) && optionLtp <= entry - slPts;
+    const timeUp = isUnarmedExitTime(clock.minutes);
+    if (slHit || timeUp) {
+      const fresh = await LivePaperTrade.findById(engineState.openTradeId);
+      if (!fresh || fresh.exitTime) {
+        clearOpenTrade();
+        return;
+      }
+      const reason = slHit ? 'STOP_LOSS' : 'TIME_EXIT';
+      logEntry(slHit ? 'EMERGENCY_SL_EXIT' : 'UNARMED_TIME_EXIT', {
+        ist: istClockLabel(clock),
+        tradeId: fresh._id.toString(),
+        optionLtp,
+        entry,
+        slPremium: slPts != null ? Number((entry - slPts).toFixed(2)) : null,
+        unarmedExitTime: engineState.settings.unarmedExitTime || null,
+      });
+      sealMissedMilestones(fresh);
+      await finalizeTrade(fresh, {
+        exitPremium: optionLtp,
+        mark,
+        reason,
+        forceChain: !slHit,
+      });
+      return;
+    }
+  }
+
+  if (isEodExitTime(clock.minutes) || unarmedTimeUp) {
     const fresh = await LivePaperTrade.findById(engineState.openTradeId);
     if (!fresh || fresh.exitTime) {
       clearOpenTrade();
       return;
     }
     sealMissedMilestones(fresh);
+    const staleMark = mark.source === 'entry';
     await finalizeTrade(fresh, {
-      exitPremium: optionLtp,
+      exitPremium: staleMark ? null : optionLtp,
       mark,
-      reason: 'DAY_CLOSE',
+      reason: isEodExitTime(clock.minutes) ? 'DAY_CLOSE' : 'TIME_EXIT',
       forceChain: true,
     });
   }
@@ -1635,7 +1720,7 @@ async function reapplyExitPointsToOpenTrade({ reason = 'SETTINGS' } = {}) {
     cacheOpenTradeLite(trade);
     return { ok: true, updated: 0 };
   }
-  const noteBit = `exits_reapplied=${reason}; trail=+20→+10/+30→+20/+40→+25 peak-${PEAK_TRAIL_GAP}; sl=off`;
+  const noteBit = `exits_reapplied=${reason}; trail=+20→+10/+30→+20/+40→+25 peak-${PEAK_TRAIL_GAP}; ${exitRulesNote()}`;
   trade.notes = [trade.notes, noteBit].filter(Boolean).join(' | ').slice(0, 500);
   await trade.save();
   cacheOpenTradeLite(trade);
