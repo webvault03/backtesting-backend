@@ -66,6 +66,7 @@ const {
 } = require('../controllers/oiFlowController');
 const {
   getLiquidityOiChaseChart,
+  getNiftyAvgBuySell,
 } = require('../controllers/liquidityOiChaseController');
 
 const router = express.Router();
@@ -144,5 +145,6 @@ router.get('/oi-flow/signals', getOiFlowSignals);
 router.post('/oi-flow/signals/backfill', postOiFlowSignalsBackfill);
 
 router.get('/liquidity-oi-chase/chart', getLiquidityOiChaseChart);
+router.get('/liquidity-oi-chase/avg-buy-sell', getNiftyAvgBuySell);
 
 module.exports = router;
