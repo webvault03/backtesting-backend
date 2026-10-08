@@ -1,7 +1,9 @@
 const path = require('path');
-
+// port number for the backend server
 const PORT = process.env.PORT || 3001;
+// path to the environment file
 const BACKEND_ENV_PATH = path.resolve(__dirname, '..', '..', '.env');
+// cache ttl in milliseconds
 const CACHE_TTL_MS = 5 * 60 * 1000;
 
 /**
