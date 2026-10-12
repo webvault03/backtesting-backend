@@ -24,10 +24,6 @@ const {
   getOiCandleAgreeBacktestJob,
 } = require('../controllers/oiCandleAgreeBacktestController');
 const {
-  postExpiryStraddleBacktestRun,
-  getExpiryStraddleBacktestJob,
-} = require('../controllers/expiryStraddleBacktestController');
-const {
   postOiTrailBacktestRun,
   getOiTrailBacktestJob,
   postEma5BreakoutBacktestRun,
@@ -160,8 +156,6 @@ router.post('/oi-flow/signals/backfill', postOiFlowSignalsBackfill);
 
 router.post('/backtest/oi-candle-agree/run', postOiCandleAgreeBacktestRun);
 router.get('/backtest/oi-candle-agree/jobs/:jobId', getOiCandleAgreeBacktestJob);
-router.post('/backtest/expiry-straddle/run', postExpiryStraddleBacktestRun);
-router.get('/backtest/expiry-straddle/jobs/:jobId', getExpiryStraddleBacktestJob);
 router.post('/backtest/oi-trail/run', postOiTrailBacktestRun);
 router.get('/backtest/oi-trail/jobs/:jobId', getOiTrailBacktestJob);
 router.post('/backtest/ema5-breakout/run', postEma5BreakoutBacktestRun);
