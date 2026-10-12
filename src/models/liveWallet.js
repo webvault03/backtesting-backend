@@ -73,8 +73,6 @@ const liveWalletSchema = new mongoose.Schema(
     },
     /** OI + Candle Agree — 15m REAL agree · ATM · profit trail · Nifty signal-candle SL · exit 15:15. */
     strategy17EngineSettings: {
-      /** Points beyond the signal candle high (PE) / low (CE) for the Nifty stop. */
-      spotSlBuffer: { type: Number, default: 10 },
       symbol: { type: String, default: 'NIFTY' },
       lotCount: { type: Number, default: 5 },
       tradeFromTime: { type: String, default: '09:20' },
