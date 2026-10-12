@@ -225,6 +225,9 @@ async function loadDays(from, to, live = new Map()) {
 
 module.exports = {
   addDays,
+  dhanPost,
   ensureDays,
+  istParts,
   loadDays,
+  mapLimit,
 };

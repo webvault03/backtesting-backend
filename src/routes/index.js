@@ -28,6 +28,8 @@ const {
   getOiTrailBacktestJob,
   postEma5BreakoutBacktestRun,
   getEma5BreakoutBacktestJob,
+  postShortStraddleBacktestRun,
+  getShortStraddleBacktestJob,
 } = require('../controllers/strategyRunBacktestController');
 const {
   getStatus: getLiveStatus,
@@ -160,6 +162,8 @@ router.post('/backtest/oi-trail/run', postOiTrailBacktestRun);
 router.get('/backtest/oi-trail/jobs/:jobId', getOiTrailBacktestJob);
 router.post('/backtest/ema5-breakout/run', postEma5BreakoutBacktestRun);
 router.get('/backtest/ema5-breakout/jobs/:jobId', getEma5BreakoutBacktestJob);
+router.post('/backtest/short-straddle-next-day/run', postShortStraddleBacktestRun);
+router.get('/backtest/short-straddle-next-day/jobs/:jobId', getShortStraddleBacktestJob);
 
 router.get('/liquidity-oi-chase/chart', getLiquidityOiChaseChart);
 router.get('/liquidity-oi-chase/avg-buy-sell', getNiftyAvgBuySell);

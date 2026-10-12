@@ -5,14 +5,14 @@ const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 const HISTORY_START = '2025-01-01';
 
 /** `from` / `to` (YYYY-MM-DD) from a run request; `to` is capped at today. */
-function parseDateRange(body = {}) {
+function parseDateRange(body = {}, { historyStart = HISTORY_START } = {}) {
   const today = getIstClock(new Date()).dateKey;
   const from = String(body.from || '');
   let to = String(body.to || '');
   if (!DATE_RE.test(from) || !DATE_RE.test(to)) throw new Error('from / to must be YYYY-MM-DD');
   if (to >= today) to = today;
   if (from > to) throw new Error('from must be on or before to');
-  if (from < HISTORY_START) throw new Error(`History starts ${HISTORY_START}`);
+  if (from < historyStart) throw new Error(`History starts ${historyStart}`);
   return { from, to };
 }
 

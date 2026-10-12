@@ -1,5 +1,6 @@
 const oiTrail = require('../services/oiTrailBacktest/engine');
 const ema5 = require('../services/ema5BreakoutBacktest/engine');
+const shortStraddle = require('../services/shortStraddleBacktest/engine');
 const { parseDateRange, numberIn, parseLots, jobHandlers } = require('./backtestRequest');
 
 const oiTrailHandlers = jobHandlers(
@@ -35,7 +36,25 @@ const ema5Handlers = jobHandlers(
   ema5.runBacktest,
 );
 
+const shortStraddleHandlers = jobHandlers(
+  'short-straddle-next-day',
+  (body) => {
+    const d = shortStraddle.DEFAULT_RULE;
+    return {
+      ...parseDateRange(body, { historyStart: '2021-01-01' }),
+      lots: Math.min(50, Math.max(1, Math.round(Number(body.lots) || 1))),
+      rule: {
+        lotSize: Math.round(numberIn(body.lotSize, 1, 500, d.lotSize)),
+        charges: numberIn(body.charges, 0, 10000, d.charges),
+      },
+    };
+  },
+  shortStraddle.runBacktest,
+);
+
 module.exports = {
+  postShortStraddleBacktestRun: shortStraddleHandlers.run,
+  getShortStraddleBacktestJob: shortStraddleHandlers.status,
   postOiTrailBacktestRun: oiTrailHandlers.run,
   getOiTrailBacktestJob: oiTrailHandlers.status,
   postEma5BreakoutBacktestRun: ema5Handlers.run,
