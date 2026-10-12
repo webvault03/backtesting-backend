@@ -393,7 +393,7 @@ async function fetchIntradayDayVolume({ dateKey, securityId, exchangeSegment, in
   return stats.volume;
 }
 
-async function fetchTradingDayCandles({ symbol, interval, dateKey }) {
+async function fetchTradingDayCandles({ symbol, interval, dateKey, includeOpenBar = false }) {
   const resolved = resolveSymbolConfig(symbol);
   if (!resolved.securityId || !resolved.exchangeSegment) {
     throw new Error('Unsupported symbol selected');
@@ -404,6 +404,8 @@ async function fetchTradingDayCandles({ symbol, interval, dateKey }) {
     instrument: resolved.instrument,
     interval,
     dateKey,
+    // Dhan treats fromDate as exclusive: a 09:15:00 start drops the 09:15 candle.
+    fromDateTime: includeOpenBar ? `${dateKey} 09:00:00` : null,
   });
 }
 
@@ -411,9 +413,16 @@ async function fetchTradingDayCandles({ symbol, interval, dateKey }) {
  * Single-day intraday candles for an arbitrary Dhan contract (index, future, or OPTION
  * contract by securityId). Used by the backtest to pull REAL historical option premiums.
  */
-async function fetchIntradayCandlesBySecurity({ securityId, exchangeSegment, instrument, interval, dateKey }) {
+async function fetchIntradayCandlesBySecurity({
+  securityId,
+  exchangeSegment,
+  instrument,
+  interval,
+  dateKey,
+  fromDateTime = null,
+}) {
   const raw = await fetchDhanIntradayChunk({
-    fromDate: dateKey,
+    fromDate: fromDateTime || dateKey,
     toDate: dateKey,
     interval: String(interval),
     securityId,

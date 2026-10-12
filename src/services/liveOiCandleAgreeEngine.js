@@ -4,7 +4,7 @@
  *   Writing|Buying + bearish candle → PE BUY (ATM)
  *   Short cover|Writing + bullish candle → CE BUY (ATM)
  * One entry. Trail rungs +20/+30/+40/+50/+70 arm a profit lock; retrace to lock → exit.
- * Nifty SL: PE exits when spot ≥ signal candle high + buffer; CE when spot ≤ low − buffer.
+ * Nifty SL: PE exits when spot ≥ signal candle high; CE when spot ≤ signal candle low.
  * Day close 15:15 only if trail never arms.
  * Entry window default 09:20–14:00.
  */
@@ -28,6 +28,7 @@ const {
   unsubscribeLiveSymbol,
   getIndexLtp,
 } = require('./dhanLiveService');
+const { fetchTradingDayCandles } = require('./dhanDataService');
 const { STRATEGY_SEVENTEEN_OI_CANDLE_AGREE_LIVE_KEY } = require('../strategies/keys');
 const { broadcastPaperLive } = require('./realtimeSocket');
 const {
@@ -61,17 +62,45 @@ const DEFAULT_TARGET_POINTS = 70;
 const TRAIL_NOTE = `trail=+20→+10/+30→+20/+40→+25 then peak-${PEAK_TRAIL_GAP}`;
 const DEFAULT_PROXIMITY = 25;
 const DEFAULT_LOOKAROUND = 12;
-const DEFAULT_SPOT_SL_BUFFER = 10;
+/** PE: signal candle high · CE: signal candle low. */
+function spotStopFromBar(bar, optionType) {
+  const level = Number(optionType === 'PE' ? bar?.high : bar?.low);
+  return Number.isFinite(level) && level > 0 ? Number(level.toFixed(2)) : null;
+}
 
-/** PE: above the signal candle high · CE: below its low. */
-function spotStopFromBar(bar, optionType, buffer) {
-  const buf = Math.max(0, Number(buffer) || 0);
-  if (optionType === 'PE') {
-    const high = Number(bar?.high);
-    return Number.isFinite(high) ? Number((high + buf).toFixed(2)) : null;
+/**
+ * Exchange 15m candle for the signal bar. The minute OI tape samples spot once a
+ * minute and misses the 09:15 opening spike, so the SL must use the real candle.
+ * Falls back to the tape bar if Dhan is unavailable; never narrower than the tape bar.
+ */
+async function resolveSignalCandle(clock, bar) {
+  const tapeHigh = Number(bar?.high);
+  const tapeLow = Number(bar?.low);
+  const startMin = Number(bar?.startMin);
+  let dhan = null;
+  if (Number.isFinite(startMin)) {
+    try {
+      const { rows } = await fetchTradingDayCandles({
+        symbol: getEngineSymbol(),
+        interval: 15,
+        dateKey: clock.dateKey,
+        includeOpenBar: true,
+      });
+      const row = (rows || []).find((r) => getIstClock(new Date(r[0])).minutes === startMin);
+      if (row && Number.isFinite(Number(row[2])) && Number.isFinite(Number(row[3]))) {
+        dhan = { high: Number(row[2]), low: Number(row[3]) };
+      }
+    } catch (err) {
+      engineState.lastError = `Signal candle fetch: ${err.message}`;
+    }
   }
-  const low = Number(bar?.low);
-  return Number.isFinite(low) ? Number((low - buf).toFixed(2)) : null;
+  const highs = [dhan?.high, tapeHigh].filter((n) => Number.isFinite(n) && n > 0);
+  const lows = [dhan?.low, tapeLow].filter((n) => Number.isFinite(n) && n > 0);
+  return {
+    high: highs.length ? Math.max(...highs) : null,
+    low: lows.length ? Math.min(...lows) : null,
+    source: dhan ? 'dhan15m' : 'tape',
+  };
 }
 
 function spotStopHit(trade, spot) {
@@ -129,7 +158,6 @@ const engineState = {
     maxTradesPerDay: 1,
     cooldownMinutes: 2,
     perTradeCost: 100,
-    spotSlBuffer: DEFAULT_SPOT_SL_BUFFER,
   },
   lotSize: 65,
   expiry: null,
@@ -266,9 +294,6 @@ function normalizeSettings(settings = {}) {
     Number.isFinite(Number(settings.perTradeCost)) && Number(settings.perTradeCost) >= 0
       ? Number(settings.perTradeCost)
       : 100;
-  const bufRaw = Number(settings.spotSlBuffer);
-  const spotSlBuffer =
-    Number.isFinite(bufRaw) && bufRaw >= 0 ? Math.min(200, bufRaw) : DEFAULT_SPOT_SL_BUFFER;
 
   return {
     symbol: String(settings.symbol || 'NIFTY').toUpperCase(),
@@ -285,7 +310,6 @@ function normalizeSettings(settings = {}) {
     maxTradesPerDay,
     cooldownMinutes,
     perTradeCost,
-    spotSlBuffer,
   };
 }
 
@@ -908,8 +932,8 @@ async function placeLongOption(clock, signal, spot) {
     const milestones = buildTargetMilestones(entryPremium);
     const targetPremium = nextPendingTargetPremium(milestones);
     const barEndMin = Number(signal.bar?.endMin);
-    const spotSlBuffer = engineState.settings.spotSlBuffer;
-    const spotStopLoss = spotStopFromBar(signal.bar, optionType, spotSlBuffer);
+    const signalCandle = await resolveSignalCandle(clock, signal.bar);
+    const spotStopLoss = spotStopFromBar(signalCandle, optionType);
 
     const tradeDoc = await LivePaperTrade.create({
       strategyKey: STRATEGY_KEY,
@@ -938,7 +962,7 @@ async function placeLongOption(clock, signal, spot) {
       highSinceEntry: Number(entryPremium.toFixed(2)),
       legs: [{ optionType, entryPremium: Number(entryPremium.toFixed(2)) }],
       entryReason: `Buy ${optionType} ATM · ${signal.reason || 'AGREE'}`,
-      notes: `oi_candle_agree; priceSource=SPOT; atm=${strike}; shape=${signal.shape}; pair=${signal.pair}; dir=${signal.dir}; reason=${signal.reason}; barEnd=${barEndMin}; barH=${signal.bar?.high}; barL=${signal.bar?.low}; ${TRAIL_NOTE}; spotSl=${spotStopLoss ?? 'off'} (candle ${optionType === 'PE' ? 'high+' : 'low-'}${spotSlBuffer}); eod=15:15-if-unarmed`,
+      notes: `oi_candle_agree; priceSource=SPOT; atm=${strike}; shape=${signal.shape}; pair=${signal.pair}; dir=${signal.dir}; reason=${signal.reason}; barEnd=${barEndMin}; barH=${signalCandle.high}; barL=${signalCandle.low}; barSrc=${signalCandle.source}; ${TRAIL_NOTE}; spotSl=${spotStopLoss ?? 'off'} (candle ${optionType === 'PE' ? 'high' : 'low'}); eod=15:15-if-unarmed`,
     });
 
     if (Number.isFinite(barEndMin)) {
