@@ -24,6 +24,16 @@ const {
   getOiCandleAgreeBacktestJob,
 } = require('../controllers/oiCandleAgreeBacktestController');
 const {
+  postExpiryStraddleBacktestRun,
+  getExpiryStraddleBacktestJob,
+} = require('../controllers/expiryStraddleBacktestController');
+const {
+  postOiTrailBacktestRun,
+  getOiTrailBacktestJob,
+  postEma5BreakoutBacktestRun,
+  getEma5BreakoutBacktestJob,
+} = require('../controllers/strategyRunBacktestController');
+const {
   getStatus: getLiveStatus,
   startLive,
   stopLive,
@@ -150,6 +160,12 @@ router.post('/oi-flow/signals/backfill', postOiFlowSignalsBackfill);
 
 router.post('/backtest/oi-candle-agree/run', postOiCandleAgreeBacktestRun);
 router.get('/backtest/oi-candle-agree/jobs/:jobId', getOiCandleAgreeBacktestJob);
+router.post('/backtest/expiry-straddle/run', postExpiryStraddleBacktestRun);
+router.get('/backtest/expiry-straddle/jobs/:jobId', getExpiryStraddleBacktestJob);
+router.post('/backtest/oi-trail/run', postOiTrailBacktestRun);
+router.get('/backtest/oi-trail/jobs/:jobId', getOiTrailBacktestJob);
+router.post('/backtest/ema5-breakout/run', postEma5BreakoutBacktestRun);
+router.get('/backtest/ema5-breakout/jobs/:jobId', getEma5BreakoutBacktestJob);
 
 router.get('/liquidity-oi-chase/chart', getLiquidityOiChaseChart);
 router.get('/liquidity-oi-chase/avg-buy-sell', getNiftyAvgBuySell);
