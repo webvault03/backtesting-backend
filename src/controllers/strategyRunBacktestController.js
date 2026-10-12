@@ -1,7 +1,7 @@
 const oiTrail = require('../services/oiTrailBacktest/engine');
 const ema5 = require('../services/ema5BreakoutBacktest/engine');
 const shortStraddle = require('../services/shortStraddleBacktest/engine');
-const starReversal = require('../services/starReversalBacktest/engine');
+const gappingPlay = require('../services/gappingPlayBacktest/engine');
 const cvdOi = require('../services/cvdOiBacktest/engine');
 const { parseDateRange, numberIn, parseLots, jobHandlers } = require('./backtestRequest');
 
@@ -85,36 +85,35 @@ const cvdOiHandlers = jobHandlers(
   cvdOi.runBacktest,
 );
 
-const HHMM_RE = /^(\d{2}):(\d{2})$/;
+const GAP_SIDES = new Set(['both', 'up', 'down']);
 
-const starReversalHandlers = jobHandlers(
-  'star-reversal',
+const gappingPlayHandlers = jobHandlers(
+  'gapping-play',
   (body) => {
-    const d = starReversal.DEFAULT_RULE;
-    const t = HHMM_RE.exec(String(body.lastEntry || ''));
-    const lastEntryMin = t ? Number(t[1]) * 60 + Number(t[2]) : d.lastEntryMin;
+    const d = gappingPlay.DEFAULT_RULE;
+    const restMin = Math.round(numberIn(body.restMin, 1, 20, d.restMin));
     return {
       ...parseDateRange(body, { historyStart: '2021-01-01' }),
       lots: Math.min(50, Math.max(1, Math.round(Number(body.lots) || 1))),
       rule: {
         lotSize: Math.round(numberIn(body.lotSize, 1, 500, d.lotSize)),
         charges: numberIn(body.charges, 0, 10000, d.charges),
-        tallFactor: numberIn(body.tallFactor, 0.5, 10, d.tallFactor),
-        starMaxPct: numberIn(body.starMaxPct, 1, 100, d.starMaxPct),
-        penetrationPct: numberIn(body.penetrationPct, 0, 100, d.penetrationPct),
-        lastEntryMin: lastEntryMin >= 9 * 60 + 30 && lastEntryMin <= 15 * 60 + 20 ? lastEntryMin : d.lastEntryMin,
-        maxTradesPerDay: Math.round(numberIn(body.maxTradesPerDay, 1, 20, d.maxTradesPerDay)),
+        impulseMinPct: numberIn(body.impulseMinPct, 0.2, 20, d.impulseMinPct),
+        restMin,
+        restMax: Math.max(restMin, Math.round(numberIn(body.restMax, 1, 20, d.restMax))),
+        maxRangePct: numberIn(body.maxRangePct, 0.1, 20, d.maxRangePct),
+        sides: GAP_SIDES.has(body.sides) ? body.sides : d.sides,
         minPremium: numberIn(body.minPremium, 0, 500, d.minPremium),
         slippage: numberIn(body.slippage, 0, 5, d.slippage),
       },
     };
   },
-  starReversal.runBacktest,
+  gappingPlay.runBacktest,
 );
 
 module.exports = {
-  postStarReversalBacktestRun: starReversalHandlers.run,
-  getStarReversalBacktestJob: starReversalHandlers.status,
+  postGappingPlayBacktestRun: gappingPlayHandlers.run,
+  getGappingPlayBacktestJob: gappingPlayHandlers.status,
   postCvdOiBacktestRun: cvdOiHandlers.run,
   getCvdOiBacktestJob: cvdOiHandlers.status,
   postShortStraddleBacktestRun: shortStraddleHandlers.run,
