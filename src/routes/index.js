@@ -30,6 +30,10 @@ const {
   getEma5BreakoutBacktestJob,
   postShortStraddleBacktestRun,
   getShortStraddleBacktestJob,
+  postStarReversalBacktestRun,
+  getStarReversalBacktestJob,
+  postCvdOiBacktestRun,
+  getCvdOiBacktestJob,
 } = require('../controllers/strategyRunBacktestController');
 const {
   getStatus: getLiveStatus,
@@ -164,6 +168,10 @@ router.post('/backtest/ema5-breakout/run', postEma5BreakoutBacktestRun);
 router.get('/backtest/ema5-breakout/jobs/:jobId', getEma5BreakoutBacktestJob);
 router.post('/backtest/short-straddle-next-day/run', postShortStraddleBacktestRun);
 router.get('/backtest/short-straddle-next-day/jobs/:jobId', getShortStraddleBacktestJob);
+router.post('/backtest/star-reversal/run', postStarReversalBacktestRun);
+router.get('/backtest/star-reversal/jobs/:jobId', getStarReversalBacktestJob);
+router.post('/backtest/cvd-oi/run', postCvdOiBacktestRun);
+router.get('/backtest/cvd-oi/jobs/:jobId', getCvdOiBacktestJob);
 
 router.get('/liquidity-oi-chase/chart', getLiquidityOiChaseChart);
 router.get('/liquidity-oi-chase/avg-buy-sell', getNiftyAvgBuySell);
