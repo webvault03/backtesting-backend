@@ -20,6 +20,10 @@ const {
 const { loginRateLimit } = require('../middleware/loginRateLimit');
 const { postDhanAccessToken, getDhanTokenStatus } = require('../controllers/dhanTokenController');
 const {
+  postOiCandleAgreeBacktestRun,
+  getOiCandleAgreeBacktestJob,
+} = require('../controllers/oiCandleAgreeBacktestController');
+const {
   getStatus: getLiveStatus,
   startLive,
   stopLive,
@@ -143,6 +147,9 @@ router.get('/oi-flow/archives/:dateKey/download', getOiFlowArchiveDownload);
 router.get('/oi-flow/header-signal', getOiFlowHeaderSignal);
 router.get('/oi-flow/signals', getOiFlowSignals);
 router.post('/oi-flow/signals/backfill', postOiFlowSignalsBackfill);
+
+router.post('/backtest/oi-candle-agree/run', postOiCandleAgreeBacktestRun);
+router.get('/backtest/oi-candle-agree/jobs/:jobId', getOiCandleAgreeBacktestJob);
 
 router.get('/liquidity-oi-chase/chart', getLiquidityOiChaseChart);
 router.get('/liquidity-oi-chase/avg-buy-sell', getNiftyAvgBuySell);
