@@ -6,9 +6,6 @@ const STRATEGY_SIX_KEY = 'strategy6_short_straddle_next_day';
 /** Legacy alias — Results/tradeQueries default still imports STRATEGY_TWO_KEY. */
 const STRATEGY_TWO_KEY = STRATEGY_SIX_KEY;
 const STRATEGY_SIX_SHORT_STRADDLE_LIVE_KEY = 'strategy6_short_straddle_next_day_live';
-const STRATEGY_FOURTEEN_EOD_OI_WALLS_LIVE_KEY = 'strategy14_eod_oi_walls_live';
-/** EOD OI Walls Spot — same walls logic, Nifty cash/index price (not FUT), default +15 / no SL. */
-const STRATEGY_FIFTEEN_EOD_OI_WALLS_SPOT_LIVE_KEY = 'strategy15_eod_oi_walls_spot_live';
 /** Open OI Walls — 09:15 |ΔOI| Put/Call tops · CE/PE at that strike · ladder · exit 15:15 · no SL. */
 const STRATEGY_SIXTEEN_OPEN_OI_WALLS_LIVE_KEY = 'strategy16_open_oi_walls_live';
 /** OI + Candle Agree — 15m REAL agree · ATM CE/PE · ladder +5…+30 · exit 15:15 · no SL. */
@@ -22,8 +19,6 @@ module.exports = {
   STRATEGY_SIX_KEY,
   STRATEGY_TWO_KEY,
   STRATEGY_SIX_SHORT_STRADDLE_LIVE_KEY,
-  STRATEGY_FOURTEEN_EOD_OI_WALLS_LIVE_KEY,
-  STRATEGY_FIFTEEN_EOD_OI_WALLS_SPOT_LIVE_KEY,
   STRATEGY_SIXTEEN_OPEN_OI_WALLS_LIVE_KEY,
   STRATEGY_SEVENTEEN_OI_CANDLE_AGREE_LIVE_KEY,
   MANUAL_CONSOLE_LIVE_KEY,

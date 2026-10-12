@@ -45,50 +45,6 @@ const liveWalletSchema = new mongoose.Schema(
       skipExpiryDay: { type: Boolean, default: true },
       perTradeCost: { type: Number, default: 100 },
     },
-    /** EOD OI Walls next-day: engine settings. */
-    strategy14EngineSettings: {
-      symbol: { type: String, default: 'NIFTY' },
-      lotCount: { type: Number, default: 5 },
-      tradeFromTime: { type: String, default: '09:20' },
-      tradeToTime: { type: String, default: '15:10' },
-      eodExitTime: { type: String, default: '15:20' },
-      eodCaptureFromTime: { type: String, default: '15:15' },
-      targetPoints: { type: Number, default: 8 },
-      stopLossPoints: { type: Number, default: null },
-      hasStopLoss: { type: Boolean, default: false },
-      proximityPoints: { type: Number, default: 20 },
-      strikeLookaround: { type: Number, default: 12 },
-      maxTradesPerDay: { type: Number, default: 1 },
-      cooldownMinutes: { type: Number, default: 2 },
-      perTradeCost: { type: Number, default: 100 },
-    },
-    /** Yesterday's top Put+Call OI walls for next-session entry. */
-    strategy14Watchlist: {
-      type: mongoose.Schema.Types.Mixed,
-      default: null,
-    },
-    /** EOD OI Walls Spot — Nifty cash/index proximity · default +15 · no SL. */
-    strategy15EngineSettings: {
-      symbol: { type: String, default: 'NIFTY' },
-      lotCount: { type: Number, default: 5 },
-      tradeFromTime: { type: String, default: '09:20' },
-      tradeToTime: { type: String, default: '15:10' },
-      eodExitTime: { type: String, default: '15:20' },
-      eodCaptureFromTime: { type: String, default: '15:15' },
-      targetPoints: { type: Number, default: 15 },
-      stopLossPoints: { type: Number, default: null },
-      hasStopLoss: { type: Boolean, default: false },
-      proximityPoints: { type: Number, default: 20 },
-      strikeLookaround: { type: Number, default: 12 },
-      maxTradesPerDay: { type: Number, default: 1 },
-      cooldownMinutes: { type: Number, default: 2 },
-      perTradeCost: { type: Number, default: 100 },
-    },
-    /** Spot variant watchlist (separate from FUT strategy-14). */
-    strategy15Watchlist: {
-      type: mongoose.Schema.Types.Mixed,
-      default: null,
-    },
     /** Open OI Walls — 09:15 ΔOI walls · profit trail · until +20: SL 80 pts + exit 11:30 · else 15:15. */
     strategy16EngineSettings: {
       symbol: { type: String, default: 'NIFTY' },

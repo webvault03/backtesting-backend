@@ -20,8 +20,6 @@ function broadcast(event, payload) {
 
 const PAPER_LIVE_ROOMS = {
   'manual-console': 'paper-live:manual-console',
-  'strategy-14': 'paper-live:strategy-14',
-  'strategy-15': 'paper-live:strategy-15',
   'strategy-16': 'paper-live:strategy-16',
   'strategy-17': 'paper-live:strategy-17',
 };
@@ -77,7 +75,7 @@ function initRealtime(httpServer) {
   });
 
   io.on('connection', (socket) => {
-    // Paper-live MTM / live mark snapshot (EOD OI Walls + Manual Console).
+    // Paper-live MTM / live mark snapshot (OI strategies + Manual Console).
     socket.on('paper-live:subscribe', (msg = {}) => {
       const strategyId = String(msg?.strategyId || '').toLowerCase();
       const room = paperLiveRoom(strategyId);
@@ -86,10 +84,6 @@ function initRealtime(httpServer) {
         let engine = null;
         if (strategyId === 'manual-console' || strategyId === 'manual-stock') {
           engine = require('./manualTradeEngine');
-        } else if (strategyId === 'strategy-14') {
-          engine = require('./liveEodOiWallsEngine');
-        } else if (strategyId === 'strategy-15') {
-          engine = require('./liveEodOiWallsSpotEngine');
         } else if (strategyId === 'strategy-16') {
           engine = require('./liveOpenOiWallsEngine');
         } else if (strategyId === 'strategy-17') {

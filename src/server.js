@@ -9,8 +9,6 @@ const { hydrateDhanTokenFromMongo } = require('./services/dhanTokenPersistence')
 const { scheduleNseHolidayRefresh } = require('./services/nseHolidayService');
 const { initRealtime } = require('./services/realtimeSocket');
 const strategySixPaperEngine = require('./services/liveShortStraddleEngineStrategy6');
-const strategyFourteenPaperEngine = require('./services/liveEodOiWallsEngine');
-const strategyFifteenPaperEngine = require('./services/liveEodOiWallsSpotEngine');
 const strategySixteenPaperEngine = require('./services/liveOpenOiWallsEngine');
 const strategySeventeenPaperEngine = require('./services/liveOiCandleAgreeEngine');
 
@@ -18,8 +16,6 @@ async function bootBackgroundServices() {
   try {
     const s6 = require('./services/liveShortStraddleEngineStrategy6');
     await s6.reconcileOpenTrades();
-    await require('./services/liveEodOiWallsEngine').reconcileOpenTrades();
-    await require('./services/liveEodOiWallsSpotEngine').reconcileOpenTrades();
     await require('./services/liveOpenOiWallsEngine').reconcileOpenTrades();
     await require('./services/liveOiCandleAgreeEngine').reconcileOpenTrades();
   } catch (err) {
@@ -76,28 +72,6 @@ async function bootBackgroundServices() {
   }
 
   try {
-    const boot = await strategyFourteenPaperEngine.ensureEngineRunning();
-    if (boot.ok) {
-      console.log('EOD OI Walls paper-live started (strategy-14)');
-    } else {
-      console.warn('EOD OI Walls paper-live boot:', boot.error || 'unknown');
-    }
-  } catch (err) {
-    console.warn('EOD OI Walls paper-live boot failed:', err.message);
-  }
-
-  try {
-    const boot = await strategyFifteenPaperEngine.ensureEngineRunning();
-    if (boot.ok) {
-      console.log('EOD OI Walls Spot paper-live started (strategy-15)');
-    } else {
-      console.warn('EOD OI Walls Spot paper-live boot:', boot.error || 'unknown');
-    }
-  } catch (err) {
-    console.warn('EOD OI Walls Spot paper-live boot failed:', err.message);
-  }
-
-  try {
     const boot = await strategySixteenPaperEngine.ensureEngineRunning();
     if (boot.ok) {
       console.log('Open OI Walls paper-live started (strategy-16)');
@@ -124,8 +98,6 @@ async function bootBackgroundServices() {
     const resume = await notifyDhanConnectivityRestored();
     if (
       resume.strategy6?.resumed
-      || resume.strategy14?.resumed
-      || resume.strategy15?.resumed
       || resume.strategy16?.resumed
       || resume.strategy17?.resumed
     ) {
