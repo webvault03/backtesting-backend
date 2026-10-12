@@ -4,7 +4,8 @@
  *   Writing|Buying + bearish candle → PE BUY (ATM)
  *   Short cover|Writing + bullish candle → CE BUY (ATM)
  * One entry. Trail rungs +20/+30/+40/+50/+70 arm a profit lock; retrace to lock → exit.
- * No hard SL from entry. Day close 15:15 only if trail never arms.
+ * Nifty SL: PE exits when spot ≥ signal candle high + buffer; CE when spot ≤ low − buffer.
+ * Day close 15:15 only if trail never arms.
  * Entry window default 09:20–14:00.
  */
 
@@ -60,6 +61,25 @@ const DEFAULT_TARGET_POINTS = 70;
 const TRAIL_NOTE = `trail=+20→+10/+30→+20/+40→+25 then peak-${PEAK_TRAIL_GAP}`;
 const DEFAULT_PROXIMITY = 25;
 const DEFAULT_LOOKAROUND = 12;
+const DEFAULT_SPOT_SL_BUFFER = 10;
+
+/** PE: above the signal candle high · CE: below its low. */
+function spotStopFromBar(bar, optionType, buffer) {
+  const buf = Math.max(0, Number(buffer) || 0);
+  if (optionType === 'PE') {
+    const high = Number(bar?.high);
+    return Number.isFinite(high) ? Number((high + buf).toFixed(2)) : null;
+  }
+  const low = Number(bar?.low);
+  return Number.isFinite(low) ? Number((low - buf).toFixed(2)) : null;
+}
+
+function spotStopHit(trade, spot) {
+  const level = Number(trade?.spotStopLoss);
+  const s = Number(spot);
+  if (!Number.isFinite(level) || level <= 0 || !Number.isFinite(s) || s <= 0) return false;
+  return tradeOptionType(trade) === 'PE' ? s >= level : s <= level;
+}
 
 function buildTargetMilestones(entryPremium) {
   return buildTrailMilestones(entryPremium);
@@ -109,6 +129,7 @@ const engineState = {
     maxTradesPerDay: 1,
     cooldownMinutes: 2,
     perTradeCost: 100,
+    spotSlBuffer: DEFAULT_SPOT_SL_BUFFER,
   },
   lotSize: 65,
   expiry: null,
@@ -245,6 +266,9 @@ function normalizeSettings(settings = {}) {
     Number.isFinite(Number(settings.perTradeCost)) && Number(settings.perTradeCost) >= 0
       ? Number(settings.perTradeCost)
       : 100;
+  const bufRaw = Number(settings.spotSlBuffer);
+  const spotSlBuffer =
+    Number.isFinite(bufRaw) && bufRaw >= 0 ? Math.min(200, bufRaw) : DEFAULT_SPOT_SL_BUFFER;
 
   return {
     symbol: String(settings.symbol || 'NIFTY').toUpperCase(),
@@ -261,6 +285,7 @@ function normalizeSettings(settings = {}) {
     maxTradesPerDay,
     cooldownMinutes,
     perTradeCost,
+    spotSlBuffer,
   };
 }
 
@@ -408,6 +433,7 @@ function buildOpenPositionMark(trade, mark, clock) {
     isLiveMark: mark.source === 'websocket' || mark.source === 'chain',
     unrealizedPnl: Number(unrealized.toFixed(2)),
     trailLockPremium: trade.stopLossPremium != null ? Number(trade.stopLossPremium) : null,
+    spotStopLoss: trade.spotStopLoss != null ? Number(trade.spotStopLoss) : null,
     trailPeakPremium: trade.highSinceEntry != null ? Number(trade.highSinceEntry) : null,
     at: new Date().toISOString(),
     ist: istClockLabel(clock),
@@ -441,6 +467,7 @@ function cacheOpenTradeLite(trade) {
     investedAmount: Number(trade.investedAmount) || null,
     targetPremium: trade.targetPremium != null ? Number(trade.targetPremium) : null,
     stopLossPremium: trade.stopLossPremium != null ? Number(trade.stopLossPremium) : null,
+    spotStopLoss: trade.spotStopLoss != null ? Number(trade.spotStopLoss) : null,
     highSinceEntry: trade.highSinceEntry != null ? Number(trade.highSinceEntry) : null,
     targetMilestones: serializeMilestones(trade.targetMilestones),
     status: 'OPEN',
@@ -881,6 +908,8 @@ async function placeLongOption(clock, signal, spot) {
     const milestones = buildTargetMilestones(entryPremium);
     const targetPremium = nextPendingTargetPremium(milestones);
     const barEndMin = Number(signal.bar?.endMin);
+    const spotSlBuffer = engineState.settings.spotSlBuffer;
+    const spotStopLoss = spotStopFromBar(signal.bar, optionType, spotSlBuffer);
 
     const tradeDoc = await LivePaperTrade.create({
       strategyKey: STRATEGY_KEY,
@@ -901,6 +930,7 @@ async function placeLongOption(clock, signal, spot) {
       creditReceived: 0,
       charges: Number(charges.toFixed(2)),
       stopLossPremium: null,
+      spotStopLoss,
       targetPremium: targetPremium != null ? Number(targetPremium.toFixed(2)) : null,
       stopLossMode: 'POINTS',
       targetMode: 'POINTS',
@@ -908,7 +938,7 @@ async function placeLongOption(clock, signal, spot) {
       highSinceEntry: Number(entryPremium.toFixed(2)),
       legs: [{ optionType, entryPremium: Number(entryPremium.toFixed(2)) }],
       entryReason: `Buy ${optionType} ATM · ${signal.reason || 'AGREE'}`,
-      notes: `oi_candle_agree; priceSource=SPOT; atm=${strike}; shape=${signal.shape}; pair=${signal.pair}; dir=${signal.dir}; reason=${signal.reason}; barEnd=${barEndMin}; ${TRAIL_NOTE}; sl=off; eod=15:15-if-unarmed`,
+      notes: `oi_candle_agree; priceSource=SPOT; atm=${strike}; shape=${signal.shape}; pair=${signal.pair}; dir=${signal.dir}; reason=${signal.reason}; barEnd=${barEndMin}; barH=${signal.bar?.high}; barL=${signal.bar?.low}; ${TRAIL_NOTE}; spotSl=${spotStopLoss ?? 'off'} (candle ${optionType === 'PE' ? 'high+' : 'low-'}${spotSlBuffer}); eod=15:15-if-unarmed`,
     });
 
     if (Number.isFinite(barEndMin)) {
@@ -936,6 +966,7 @@ async function placeLongOption(clock, signal, spot) {
       targetPremium,
       targetMilestones: serializeMilestones(milestones),
       stopLossPremium: null,
+      spotStopLoss,
     });
     publishLiveSignal({
       ok: true,
@@ -1185,6 +1216,31 @@ async function checkOpenTrade({ preferTicks = false } = {}) {
 
   const optionLtp = Number(mark.optionLtp);
   if (!Number.isFinite(optionLtp) || optionLtp <= 0) return;
+
+  const spotNow = masterPrice();
+  if (spotStopHit(trade, spotNow)) {
+    const fresh = await LivePaperTrade.findById(engineState.openTradeId);
+    if (!fresh || fresh.exitTime) {
+      clearOpenTrade();
+      return;
+    }
+    logEntry('NIFTY_SL_EXIT', {
+      ist: istClockLabel(clock),
+      tradeId: fresh._id.toString(),
+      optionType: tradeOptionType(fresh),
+      spot: spotNow,
+      spotStopLoss: fresh.spotStopLoss,
+      optionLtp,
+    });
+    await finalizeTrade(fresh, {
+      exitPremium: null,
+      mark: { ...mark, spot: spotNow },
+      reason: 'NIFTY_SL',
+      forceChain: true,
+    });
+    return;
+  }
+
   if (mark.source === 'entry' && !isEodExitTime(clock.minutes)) return;
 
   // Arm trail rungs from peak; cut if LTP falls back to the lock.
@@ -1363,7 +1419,7 @@ async function reapplyExitPointsToOpenTrade({ reason = 'SETTINGS' } = {}) {
     cacheOpenTradeLite(trade);
     return { ok: true, updated: 0 };
   }
-  const noteBit = `exits_reapplied=${reason}; ${TRAIL_NOTE}; sl=off`;
+  const noteBit = `exits_reapplied=${reason}; ${TRAIL_NOTE}; spotSl=${trade.spotStopLoss ?? 'off'}`;
   trade.notes = [trade.notes, noteBit].filter(Boolean).join(' | ').slice(0, 500);
   await trade.save();
   cacheOpenTradeLite(trade);

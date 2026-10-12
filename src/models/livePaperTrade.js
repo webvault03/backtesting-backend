@@ -32,6 +32,8 @@ const livePaperTradeSchema = new mongoose.Schema(
     refHigh: { type: Number, default: null },
     targetSpot: { type: Number, default: null },
     combinedStopSpot: { type: Number, default: null },
+    /** Underlying (Nifty spot) stop level — PE exits when spot ≥ level, CE when spot ≤ level. */
+    spotStopLoss: { type: Number, default: null },
     exitPremium: { type: Number, default: null },
     exitSpot: { type: Number, default: null },
     exitTime: { type: Date, default: null },
