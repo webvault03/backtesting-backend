@@ -136,10 +136,7 @@ const openOiWallsHandlers = jobHandlers(
         emergencySl: numberIn(body.emergencySl, 0, 500, d.emergencySl),
         unarmedExit: clockIn(body.unarmedExit, 9 * 60 + 20, 15 * 60 + 25, d.unarmedExit),
         entryTo: clockIn(body.entryTo, 9 * 60 + 16, 15 * 60, d.entryTo),
-        slippage: numberIn(body.slippage, 0, 5, d.slippage),
-        avgExit: typeof body.avgExit === 'boolean' ? body.avgExit : d.avgExit,
-        avgExitPts: numberIn(body.avgExitPts, 1, 200, d.avgExitPts),
-      },
+        slippage: numberIn(body.slippage, 0, 5, d.slippage),      },
     };
   },
   openOiWalls.runBacktest,

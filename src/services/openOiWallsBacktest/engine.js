@@ -10,11 +10,7 @@
  *     a touch inside a minute fills at the next minute's option open (1-min data has no ticks — the next
  *     real price is used, never a guess from the touched minute's range). One trade per day.
  *   Exit (live trail): peak +20/+30/+40/+50/+70 locks +10/+20/+25/+30/+50, from +40 also peak − 20;
- *     option back to the lock → exit at the lock. Until armed: SL entry − 80 and exit at 11:30. Close 15:15.
- *   Average exit (until armed, optional): a minute closing with NIFTY avgExitPts on the wrong side of the
- *     running average of 1-min closes (CE below, PE above; measured from where the trade started if it
- *     began on the wrong side) → exit at the next minute's option open.
- *     Within a minute stops are checked before the minute's high raises the lock (new lock applies next
+ *     option back to the lock → exit at the lock. Until armed: SL entry − 80 and exit at 11:30. Close 15:15. *     Within a minute stops are checked before the minute's high raises the lock (new lock applies next
  *     minute), and a stop is checked before a rung in the same minute.
  */
 const { addDays, ensureDays, loadDays } = require('./dataSource');
@@ -38,8 +34,6 @@ const DEFAULT_RULE = {
   entryTo: 10 * 60 + 15,
   eod: 15 * 60 + 15,
   slippage: 0,
-  avgExit: true,
-  avgExitPts: 15,
 };
 
 const r2 = (n) => Number(Number(n).toFixed(2));
@@ -208,19 +202,8 @@ function findEntry(nifty, day, walls, fromMin, rule, events) {
   return null;
 }
 
-/** How far NIFTY's close of `m` sits on the wrong side of the running average (CE: below, PE: above). */
-function againstAverage(nifty, m, optionType) {
-  const close = nifty.get(m)?.c;
-  const avg = runningAverage(nifty, m);
-  if (!Number.isFinite(close) || avg == null) return null;
-  return { pts: optionType === 'CE' ? avg - close : close - avg, close, avg };
-}
-
-function runExit({ dateKey, book, nifty, optionType, entryMin, entry, startAgainst, qty, rule, events }) {
+function runExit({ dateKey, book, entryMin, entry, qty, rule, events }) {
   const slPx = rule.emergencySl > 0 ? r2(entry - rule.emergencySl) : null;
-  // A trade that starts on the wrong side of the average must move a further avgExitPts against it.
-  const avgTrigger = rule.avgExit ? Math.max(rule.avgExitPts, (startAgainst ?? 0) + rule.avgExitPts) : null;
-  let avgSignal = false;
   const milestones = TRAIL_RUNGS.map((r) => ({
     points: r.peak,
     lockPoints: r.lock,
@@ -251,7 +234,6 @@ function runExit({ dateKey, book, nifty, optionType, entryMin, entry, startAgain
       if (open <= lockPx) return done('TRAIL', m, open);
       if (o.l <= lockPx) return done('TRAIL', m, lockPx);
     } else {
-      if (avgSignal) return done('AVG_EXIT', m, open);
       if (m >= rule.unarmedExit) return done('TIME_EXIT', m, open);
       if (slPx != null && open <= slPx) return done('SL', m, open);
       if (slPx != null && o.l <= slPx) return done('SL', m, slPx);
@@ -279,16 +261,6 @@ function runExit({ dateKey, book, nifty, optionType, entryMin, entry, startAgain
           : `Peak ₹${r2(peak)} → ${lockText}`,
       });
     }
-    if (lock == null && avgTrigger != null) {
-      const a = againstAverage(nifty, m, optionType);
-      if (a && a.pts >= avgTrigger) {
-        avgSignal = true;
-        events.push({
-          time: hhmm(m),
-          text: `Trail not armed · NIFTY closed ${r2(a.close)}, ${r2(a.pts)} pts ${optionType === 'CE' ? 'below' : 'above'} the running avg ${r2(a.avg)} (trigger ${r2(avgTrigger)}) → exit at the next minute open`,
-        });
-      }
-    }
     last = o.c;
     lastMin = m;
   }
@@ -310,19 +282,7 @@ function runDay({ day, prev, rule, qty }) {
   const { wall } = hit;
   const book = minuteMap(day[wall.optionType][String(wall.strike)]);
   const entryPremium = r2(hit.premium + rule.slippage);
-  const startAgainst = hit.avg != null ? (wall.optionType === 'CE' ? hit.avg - hit.spot : hit.spot - hit.avg) : 0;
-  const exit = runExit({
-    dateKey: day.dateKey,
-    book,
-    nifty,
-    optionType: wall.optionType,
-    entryMin: hit.min,
-    entry: entryPremium,
-    startAgainst,
-    qty,
-    rule,
-    events,
-  });
+  const exit = runExit({ dateKey: day.dateKey, book, entryMin: hit.min, entry: entryPremium, qty, rule, events });
   for (const ms of exit.milestones) if (ms.status === 'PENDING') ms.status = 'MISSED';
   const exitPremium = r2(Math.max(0.05, exit.premium - rule.slippage));
   const points = r2(exitPremium - entryPremium);
@@ -333,7 +293,6 @@ function runDay({ day, prev, rule, qty }) {
     TRAIL: `TRAIL lock +${exit.lock} @ ${hhmm(exit.min)}`,
     SL: `SL −${rule.emergencySl} @ ${hhmm(exit.min)}`,
     TIME_EXIT: `Not armed by ${hhmm(rule.unarmedExit)}`,
-    AVG_EXIT: `NIFTY against avg @ ${hhmm(exit.min)}`,
     DAY_CLOSE: `${hhmm(rule.eod)} CLOSE`,
   }[exit.type];
   events.push({ time: hhmm(exit.min), text: `Exit ₹${exitPremium} — ${reason} · ${points >= 0 ? '+' : ''}${points} pts` });
