@@ -34,6 +34,11 @@ const {
   getCvdOiBacktestJob,
   postOpenOiWallsBacktestRun,
   getOpenOiWallsBacktestJob,
+  postSupertrendBacktestRun,
+  getSupertrendBacktestJob,
+  getSupertrendChart,
+  postNisonVwapBacktestRun,
+  getNisonVwapBacktestJob,
 } = require('../controllers/strategyRunBacktestController');
 const {
   getStatus: getLiveStatus,
@@ -172,6 +177,11 @@ router.post('/backtest/cvd-oi/run', postCvdOiBacktestRun);
 router.get('/backtest/cvd-oi/jobs/:jobId', getCvdOiBacktestJob);
 router.post('/backtest/open-oi-walls/run', postOpenOiWallsBacktestRun);
 router.get('/backtest/open-oi-walls/jobs/:jobId', getOpenOiWallsBacktestJob);
+router.post('/backtest/supertrend/run', postSupertrendBacktestRun);
+router.get('/backtest/supertrend/jobs/:jobId', getSupertrendBacktestJob);
+router.get('/backtest/supertrend/chart', getSupertrendChart);
+router.post('/backtest/nison-vwap/run', postNisonVwapBacktestRun);
+router.get('/backtest/nison-vwap/jobs/:jobId', getNisonVwapBacktestJob);
 router.get('/liquidity-oi-chase/chart', getLiquidityOiChaseChart);
 router.get('/liquidity-oi-chase/avg-buy-sell', getNiftyAvgBuySell);
 
