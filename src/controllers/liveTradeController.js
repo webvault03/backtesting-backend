@@ -1,6 +1,7 @@
 const ExcelJS = require('exceljs');
 const LiveWallet = require('../models/liveWallet');
 const LivePaperTrade = require('../models/livePaperTrade');
+const Strategy16OpenWallDay = require('../models/strategy16OpenWallDay');
 const strategySixEngine = require('../services/liveShortStraddleEngineStrategy6');
 const strategySixteenEngine = require('../services/liveOpenOiWallsEngine');
 const strategySeventeenEngine = require('../services/liveOiCandleAgreeEngine');
@@ -503,6 +504,37 @@ async function resetWallet(req, res) {
   }
 }
 
+/** Capture date of the walls a Strategy-16 trade used (`capture=` in notes), else its entry day. */
+function wallCaptureDateKey(trade) {
+  const m = String(trade?.notes || '').match(/capture=(\d{4}-\d{2}-\d{2})/);
+  return m ? m[1] : trade?.entryDateKey || null;
+}
+
+/** Read-only: add the archived Open OI wall capture (`wallDay`) to each trade. */
+async function attachOpenWallDays(trades) {
+  const keys = [...new Set(trades.map(wallCaptureDateKey).filter(Boolean))];
+  if (!keys.length) return trades;
+  const days = await Strategy16OpenWallDay.find({ dateKey: { $in: keys } })
+    .select('symbol dateKey capturedAt spotAtCapture futAtCapture expiry walls')
+    .lean();
+  const byKey = new Map(days.map((d) => [`${d.symbol}|${d.dateKey}`, d]));
+  return trades.map((t) => {
+    const day = byKey.get(`${t.symbol || 'NIFTY'}|${wallCaptureDateKey(t)}`);
+    if (!day) return t;
+    return {
+      ...t,
+      wallDay: {
+        dateKey: day.dateKey,
+        capturedAt: day.capturedAt,
+        spotAtCapture: day.spotAtCapture,
+        futAtCapture: day.futAtCapture,
+        expiry: day.expiry,
+        walls: day.walls,
+      },
+    };
+  });
+}
+
 async function listTrades(req, res) {
   try {
     const ctx = getLiveContext(req);
@@ -531,7 +563,8 @@ async function listTrades(req, res) {
       .skip(skip)
       .limit(pageSize)
       .lean();
-    const tradesWithSr = trades.map((t, i) => ({ ...t, srNo: skip + i + 1 }));
+    let tradesWithSr = trades.map((t, i) => ({ ...t, srNo: skip + i + 1 }));
+    if (ctx.strategyId === 'strategy-16') tradesWithSr = await attachOpenWallDays(tradesWithSr);
     return res.json({
       ok: true,
       trades: tradesWithSr,
