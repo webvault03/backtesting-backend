@@ -1410,6 +1410,34 @@ async function onOptionTick({ ltp }) {
   });
 }
 
+const TRAIL_LOG_MIN_STEP = 5;
+const TRAIL_LOG_MAX = 200;
+
+function pushTrailLog(trade, row) {
+  const log = Array.isArray(trade.trailLog) ? trade.trailLog : [];
+  log.push({ at: new Date(), ...row });
+  trade.trailLog = log.slice(-TRAIL_LOG_MAX);
+  trade.markModified('trailLog');
+}
+
+/** Rung hits always; peak−gap moves once the lock has risen TRAIL_LOG_MIN_STEP since the last row. */
+function logTrailStep(trade, applied, ltp) {
+  const log = Array.isArray(trade.trailLog) ? trade.trailLog : [];
+  const last = [...log].reverse().find((r) => r.event !== 'EXIT');
+  const rung = applied.justHit?.length ? Math.max(...applied.justHit) : null;
+  if (rung == null && last && applied.lockPts - Number(last.lockPts) < TRAIL_LOG_MIN_STEP) return;
+  pushTrailLog(trade, {
+    event: rung != null ? 'RUNG' : 'TRAIL',
+    rung,
+    ltp: Number(Number(ltp).toFixed(2)),
+    peakPremium: applied.peakPremium,
+    peakPts: applied.peakPts,
+    lockPremium: applied.lockPremium,
+    lockPts: Number(Number(applied.lockPts).toFixed(2)),
+    source: 'live',
+  });
+}
+
 async function recordTargetMilestoneHits(trade, optionLtp) {
   const ltp = Number(optionLtp);
   if (!Number.isFinite(ltp) || ltp <= 0) return { changed: false, exit: false };
@@ -1426,10 +1454,12 @@ async function recordTargetMilestoneHits(trade, optionLtp) {
     trade.markModified('targetMilestones');
   }
   if (applied.lockPremium != null) {
-    if (Number(trade.stopLossPremium) !== applied.lockPremium) {
+    const prevLock = Number(trade.stopLossPremium);
+    if (!Number.isFinite(prevLock) || applied.lockPremium > prevLock) {
       trade.stopLossPremium = applied.lockPremium;
       trade.stopLossMode = 'POINTS';
       applied.changed = true;
+      logTrailStep(trade, applied, ltp);
     }
   }
   if (applied.nextTarget != null) trade.targetPremium = applied.nextTarget;
@@ -1625,6 +1655,20 @@ async function finalizeTrade(trade, { exitPremium, mark, reason, forceChain = fa
     trade.pnlPct = investedAmount > 0 ? Number(((pnl / investedAmount) * 100).toFixed(2)) : 0;
     trade.openPositionMark = null;
     trade.openPositionMarkAt = null;
+    const entryPx = Number(trade.entryPremium) || 0;
+    const peakPx = Number(trade.highSinceEntry);
+    const lockPx = Number(trade.stopLossPremium);
+    pushTrailLog(trade, {
+      event: 'EXIT',
+      reason,
+      ltp: Number(resolvedMark?.optionLtp) || null,
+      exitPremium: trade.exitPremium,
+      peakPremium: Number.isFinite(peakPx) ? peakPx : null,
+      peakPts: Number.isFinite(peakPx) ? Number((peakPx - entryPx).toFixed(2)) : null,
+      lockPremium: Number.isFinite(lockPx) ? lockPx : null,
+      lockPts: Number.isFinite(lockPx) ? Number((lockPx - entryPx).toFixed(2)) : null,
+      source: markSource,
+    });
     sealMissedMilestones(trade);
     const hitSummary = serializeMilestones(trade.targetMilestones)
       .map((m) => `+${m.points}:${m.status}`)

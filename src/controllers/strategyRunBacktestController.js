@@ -3,6 +3,7 @@ const ema5 = require('../services/ema5BreakoutBacktest/engine');
 const shortStraddle = require('../services/shortStraddleBacktest/engine');
 const gappingPlay = require('../services/gappingPlayBacktest/engine');
 const cvdOi = require('../services/cvdOiBacktest/engine');
+const openOiWalls = require('../services/openOiWallsBacktest/engine');
 const { parseDateRange, numberIn, parseLots, jobHandlers } = require('./backtestRequest');
 
 const oiTrailHandlers = jobHandlers(
@@ -111,7 +112,42 @@ const gappingPlayHandlers = jobHandlers(
   gappingPlay.runBacktest,
 );
 
+const CLOCK_RE = /^(\d{1,2}):(\d{2})$/;
+const clockIn = (value, min, max, fallback) => {
+  const m = CLOCK_RE.exec(String(value || '').trim());
+  const minutes = m ? Number(m[1]) * 60 + Number(m[2]) : NaN;
+  return minutes >= min && minutes <= max ? minutes : fallback;
+};
+
+const openOiWallsHandlers = jobHandlers(
+  'open-oi-walls',
+  (body) => {
+    const d = openOiWalls.DEFAULT_RULE;
+    const range = parseDateRange(body, { historyStart: '2020-01-01' });
+    if (range.to < openOiWalls.HISTORY_START) throw new Error(`Option history starts ${openOiWalls.HISTORY_START}`);
+    return {
+      from: range.from < openOiWalls.HISTORY_START ? openOiWalls.HISTORY_START : range.from,
+      to: range.to,
+      lots: parseLots(body.lots),
+      rule: {
+        lotSize: Math.round(numberIn(body.lotSize, 1, 500, d.lotSize)),
+        charges: numberIn(body.charges, 0, 10000, d.charges),
+        proximity: numberIn(body.proximity, 5, 200, d.proximity),
+        emergencySl: numberIn(body.emergencySl, 0, 500, d.emergencySl),
+        unarmedExit: clockIn(body.unarmedExit, 9 * 60 + 20, 15 * 60 + 25, d.unarmedExit),
+        entryTo: clockIn(body.entryTo, 9 * 60 + 16, 15 * 60, d.entryTo),
+        slippage: numberIn(body.slippage, 0, 5, d.slippage),
+        avgExit: typeof body.avgExit === 'boolean' ? body.avgExit : d.avgExit,
+        avgExitPts: numberIn(body.avgExitPts, 1, 200, d.avgExitPts),
+      },
+    };
+  },
+  openOiWalls.runBacktest,
+);
+
 module.exports = {
+  postOpenOiWallsBacktestRun: openOiWallsHandlers.run,
+  getOpenOiWallsBacktestJob: openOiWallsHandlers.status,
   postGappingPlayBacktestRun: gappingPlayHandlers.run,
   getGappingPlayBacktestJob: gappingPlayHandlers.status,
   postCvdOiBacktestRun: cvdOiHandlers.run,

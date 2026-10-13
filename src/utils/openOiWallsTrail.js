@@ -82,7 +82,11 @@ function applyTrailToMilestones(trade, optionLtp, { qty, charges } = {}) {
     milestones = buildTrailMilestones(entry);
   }
 
-  const peakPremium = peakFromTrade({ ...trade, targetMilestones: milestones }, optionLtp);
+  // `trade` may be a Mongoose document — spreading it drops schema fields such as highSinceEntry.
+  const peakPremium = peakFromTrade(
+    { entryPremium: entry, highSinceEntry: trade.highSinceEntry, targetMilestones: milestones },
+    optionLtp,
+  );
   const peakPts = peakPremium != null ? peakPremium - entry : 0;
   const now = new Date();
   const q = Number(qty != null ? qty : trade.qty) || 0;
@@ -124,7 +128,6 @@ function applyTrailToMilestones(trade, optionLtp, { qty, charges } = {}) {
   const ltp = Number(optionLtp);
   const armed = lockPts != null;
   const exit = armed && Number.isFinite(ltp) && ltp > 0 && ltp <= lockPremium;
-
   const nextArm = milestones.find((m) => String(m.status || '').toUpperCase() !== 'HIT');
   const nextTarget = nextArm ? Number(nextArm.premium) : null;
 

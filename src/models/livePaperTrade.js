@@ -72,6 +72,11 @@ const livePaperTradeSchema = new mongoose.Schema(
      * Position stays open until day close — targets do not close the trade.
      */
     targetMilestones: { type: [mongoose.Schema.Types.Mixed], default: undefined },
+    /**
+     * Profit-trail timeline: every rise of the lock and the exit.
+     * Each item: { at, event: RUNG|TRAIL|EXIT, ltp, peakPremium, peakPts, lockPremium, lockPts, rung?, reason?, source? }.
+     */
+    trailLog: { type: [mongoose.Schema.Types.Mixed], default: undefined },
   },
   { timestamps: true }
 );

@@ -34,6 +34,8 @@ const {
   getGappingPlayBacktestJob,
   postCvdOiBacktestRun,
   getCvdOiBacktestJob,
+  postOpenOiWallsBacktestRun,
+  getOpenOiWallsBacktestJob,
 } = require('../controllers/strategyRunBacktestController');
 const {
   getStatus: getLiveStatus,
@@ -172,6 +174,8 @@ router.post('/backtest/gapping-play/run', postGappingPlayBacktestRun);
 router.get('/backtest/gapping-play/jobs/:jobId', getGappingPlayBacktestJob);
 router.post('/backtest/cvd-oi/run', postCvdOiBacktestRun);
 router.get('/backtest/cvd-oi/jobs/:jobId', getCvdOiBacktestJob);
+router.post('/backtest/open-oi-walls/run', postOpenOiWallsBacktestRun);
+router.get('/backtest/open-oi-walls/jobs/:jobId', getOpenOiWallsBacktestJob);
 
 router.get('/liquidity-oi-chase/chart', getLiquidityOiChaseChart);
 router.get('/liquidity-oi-chase/avg-buy-sell', getNiftyAvgBuySell);
