@@ -4,7 +4,7 @@ const gappingPlay = require('../services/gappingPlayBacktest/engine');
 const cvdOi = require('../services/cvdOiBacktest/engine');
 const openOiWalls = require('../services/openOiWallsBacktest/engine');
 const supertrend = require('../services/supertrendBacktest/engine');
-const nisonVwap = require('../services/nisonVwapBacktest/engine');
+const haEma9 = require('../services/haEma9Backtest/engine');
 const { parseDateRange, numberIn, parseLots, jobHandlers } = require('./backtestRequest');
 
 const oiTrailHandlers = jobHandlers(
@@ -118,8 +118,7 @@ const openOiWallsHandlers = jobHandlers(
         unarmedExit: clockIn(body.unarmedExit, 9 * 60 + 20, 15 * 60 + 25, d.unarmedExit),
         entryTo: clockIn(body.entryTo, 9 * 60 + 16, 15 * 60, d.entryTo),
         slippage: numberIn(body.slippage, 0, 5, d.slippage),
-        skipSameStrike: typeof body.skipSameStrike === 'boolean' ? body.skipSameStrike : d.skipSameStrike,
-      },
+        skipSameStrike: typeof body.skipSameStrike === 'boolean' ? body.skipSameStrike : d.skipSameStrike,      },
     };
   },
   openOiWalls.runBacktest,
@@ -129,50 +128,34 @@ const TIMEFRAMES = [1, 3, 5, 10, 15, 30];
 const parseTimeframe = (v, fallback) => (TIMEFRAMES.includes(Number(v)) ? Number(v) : fallback);
 const parseCandleType = (v, fallback) => (v === 'heikin' || v === 'normal' ? v : fallback);
 
+/** Supertrend Flip runs one fixed rule set (DEFAULT_RULE); only the period and lots come from the request. */
 const supertrendHandlers = jobHandlers(
   'supertrend',
   (body) => {
-    const d = supertrend.DEFAULT_RULE;
     const range = parseDateRange(body, { historyStart: '2020-01-01' });
     if (range.to < supertrend.HISTORY_START) throw new Error(`Option history starts ${supertrend.HISTORY_START}`);
     return {
       from: range.from < supertrend.HISTORY_START ? supertrend.HISTORY_START : range.from,
       to: range.to,
       lots: parseLots(body.lots),
-      rule: {
-        timeframe: parseTimeframe(body.timeframe, d.timeframe),
-        candleType: parseCandleType(body.candleType, d.candleType),
-        atrLength: Math.round(numberIn(body.atrLength, 2, 100, d.atrLength)),
-        factor: numberIn(body.factor, 0.5, 10, d.factor),
-        strikeSteps: Math.round(numberIn(body.strikeSteps, -3, 5, d.strikeSteps)),
-        entryFrom: clockIn(body.entryFrom, 9 * 60 + 15, 15 * 60 + 25, d.entryFrom),
-        entryTo: clockIn(body.entryTo, 9 * 60 + 15, 15 * 60 + 25, d.entryTo),
-        eod: clockIn(body.eod, 9 * 60 + 30, 15 * 60 + 29, d.eod),
-        overnight: flag(body.overnight, d.overnight),
-        slippage: numberIn(body.slippage, 0, 5, d.slippage),
-        adxMin: numberIn(body.adxMin, 0, 100, d.adxMin),
-        adxLength: Math.round(numberIn(body.adxLength, 2, 100, d.adxLength)),
-        avgFilter: flag(body.avgFilter, d.avgFilter),
-        maxLossesPerDay: Math.round(numberIn(body.maxLossesPerDay, 0, 20, d.maxLossesPerDay)),
-        slPct: numberIn(body.slPct, 0, 100, d.slPct),
-      },
     };
   },
   supertrend.runBacktest,
 );
 
-const nisonVwapHandlers = jobHandlers(
-  'nison-vwap',
+const haEma9Handlers = jobHandlers(
+  'ha-ema9',
   (body) => {
     const range = parseDateRange(body, { historyStart: '2020-01-01' });
-    if (range.to < nisonVwap.HISTORY_START) throw new Error(`Option history starts ${nisonVwap.HISTORY_START}`);
+    if (range.to < haEma9.HISTORY_START) throw new Error(`Option history starts ${haEma9.HISTORY_START}`);
     return {
-      from: range.from < nisonVwap.HISTORY_START ? nisonVwap.HISTORY_START : range.from,
+      from: range.from < haEma9.HISTORY_START ? haEma9.HISTORY_START : range.from,
       to: range.to,
-      rule: { slippage: numberIn(body.slippage, 0, 5, nisonVwap.DEFAULT_RULE.slippage) },
+      lots: parseLots(body.lots),
+      rule: { slippage: numberIn(body.slippage, 0, 5, haEma9.DEFAULT_RULE.slippage) },
     };
   },
-  nisonVwap.runBacktest,
+  haEma9.runBacktest,
 );
 
 /** GET /backtest/supertrend/chart?from&to&timeframe&atrLength&factor — NIFTY candles + line for a trade. */
@@ -200,8 +183,8 @@ module.exports = {
   postSupertrendBacktestRun: supertrendHandlers.run,
   getSupertrendBacktestJob: supertrendHandlers.status,
   getSupertrendChart,
-  postNisonVwapBacktestRun: nisonVwapHandlers.run,
-  getNisonVwapBacktestJob: nisonVwapHandlers.status,
+  postHaEma9BacktestRun: haEma9Handlers.run,
+  getHaEma9BacktestJob: haEma9Handlers.status,
   postOpenOiWallsBacktestRun: openOiWallsHandlers.run,
   getOpenOiWallsBacktestJob: openOiWallsHandlers.status,
   postGappingPlayBacktestRun: gappingPlayHandlers.run,

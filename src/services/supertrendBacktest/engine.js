@@ -35,20 +35,25 @@ const DEFAULT_RULE = {
   entryTo: 15 * 60,
   eod: 15 * 60 + 15,
   overnight: false,
-  slippage: 0,
-  /** Entry filters (0 / false = off). */
-  adxMin: 0,
-  adxLength: 14,
-  avgFilter: false,
-  maxLossesPerDay: 0,
-  /** Option stop loss, % below the entry premium (0 = off). */
-  slPct: 0,
+  slippage: 1,
+  /** The flip must agree with the Heikin Ashi Supertrend on this higher timeframe (last closed candle). */
+  trendTimeframe: 15,
+  /** CE only when NIFTY is above the day's running average, PE only below. */
+  avgFilter: true,
+  /** Option stop loss, % below the entry premium. */
+  slPct: 25,
+  /** Once the option is up `lockAtPct` %, the stop moves up to keep `lockShare` of the best gain. */
+  lockAtPct: 40,
+  lockShare: 0.5,
+  /** No new entries for the day once closed trades lose this much per lot. */
+  dayLossPerLot: 2000,
 };
 
 const r2 = (n) => Number(Number(n).toFixed(2));
 const hhmm = (m) => `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
 const fmt = (n) => Number(n).toLocaleString('en-IN', { maximumFractionDigits: 2, minimumFractionDigits: 2 });
 const colour = (dir) => (dir === 1 ? 'GREEN' : 'RED');
+const formatInr = (n) => `${n < 0 ? '−' : ''}₹${Math.abs(Math.round(n)).toLocaleString('en-IN')}`;
 
 /** Zerodha-style F&O option charges for one buy + one sell (brokerage, STT, exchange, SEBI, GST, stamp). */
 function optionCharges(buyValue, sellValue) {
@@ -152,45 +157,29 @@ function applySupertrend(candles, atrLength, factor) {
   return candles;
 }
 
-/** Wilder ADX(len) on real NIFTY candles → Map `${dateKey}|${start}` → ADX of that closed candle. */
-function adxByCandle(candles, len) {
-  const out = new Map();
-  let trS = 0;
-  let pS = 0;
-  let mS = 0;
-  let adx = null;
-  let dxCount = 0;
-  let dxSum = 0;
-  candles.forEach((c, i) => {
-    if (i > 0) {
-      const p = candles[i - 1];
-      const up = c.h - p.h;
-      const dn = p.l - c.l;
-      const pdm = up > dn && up > 0 ? up : 0;
-      const mdm = dn > up && dn > 0 ? dn : 0;
-      const tr = Math.max(c.h - c.l, Math.abs(c.h - p.c), Math.abs(c.l - p.c));
-      if (i <= len) {
-        trS += tr;
-        pS += pdm;
-        mS += mdm;
-      } else {
-        trS = trS - trS / len + tr;
-        pS = pS - pS / len + pdm;
-        mS = mS - mS / len + mdm;
-      }
-      if (i >= len && trS > 0) {
-        const pdi = (100 * pS) / trS;
-        const mdi = (100 * mS) / trS;
-        const dx = pdi + mdi > 0 ? (100 * Math.abs(pdi - mdi)) / (pdi + mdi) : 0;
-        dxCount += 1;
-        if (dxCount < len) dxSum += dx;
-        else if (dxCount === len) adx = (dxSum + dx) / len;
-        else adx = (adx * (len - 1) + dx) / len;
-      }
+/**
+ * Higher-timeframe trend lookup: (dateKey, minute) → { dir, line, time } of the last candle that closed
+ * at or before `minute` (yesterday's last candle before today's first one closes).
+ */
+function trendLookup(candles) {
+  const byDay = new Map();
+  for (const c of candles) {
+    if (c.dir == null) continue;
+    if (!byDay.has(c.dateKey)) byDay.set(c.dateKey, []);
+    byDay.get(c.dateKey).push(c);
+  }
+  const keys = [...byDay.keys()].sort();
+  return (dateKey, minute) => {
+    const list = byDay.get(dateKey) || [];
+    let hit = null;
+    for (const c of list) if (c.end + 1 <= minute) hit = c;
+    if (!hit) {
+      const prevKey = keys.filter((k) => k < dateKey).pop();
+      const prev = prevKey ? byDay.get(prevKey) : null;
+      hit = prev ? prev[prev.length - 1] : null;
     }
-    out.set(`${c.dateKey}|${c.start}`, adx);
-  });
-  return out;
+    return hit ? { dir: hit.dir, line: hit.line, time: `${hit.dateKey === dateKey ? '' : `${hit.dateKey.slice(5)} `}${hhmm(hit.start)}–${hhmm(hit.end + 1)}` } : null;
+  };
 }
 
 /** Running average of NIFTY 1-min closes from 09:15 through `throughMin`, and the last close. */
@@ -366,9 +355,16 @@ async function runBacktest({ from, to, lots = 10, rule: ruleIn = {}, onProgress,
       niftyPts: r2(pos.side === 'CE' ? exitSpot - pos.entrySpot : pos.entrySpot - exitSpot),
       exitPremium,
       exitType: type,
-      adxAtSignal: pos.adxAtSignal,
+      trendAtEntry: pos.trendAtEntry,
       avgAtEntry: pos.avgAtEntry,
-      exitReason: { FLIP: 'Supertrend flip', SL: `SL −${rule.slPct}%`, DAY_CLOSE: `${hhmm(rule.eod)} close`, EXPIRY: 'Expiry-day close', OPEN: 'Still open (marked)' }[type],
+      exitReason: {
+        FLIP: 'Supertrend flip',
+        SL: `SL −${rule.slPct}%`,
+        LOCK: `Profit lock (${Math.round(rule.lockShare * 100)}% of best)`,
+        DAY_CLOSE: `${hhmm(rule.eod)} close`,
+        EXPIRY: 'Expiry-day close',
+        OPEN: 'Still open (marked)',
+      }[type],
       heldMin,
       overnight: day.dateKey !== pos.date,
       points,
@@ -383,23 +379,42 @@ async function runBacktest({ from, to, lots = 10, rule: ruleIn = {}, onProgress,
   };
 
   /**
-   * Option stop loss on finished minutes before `toMin`. Gap below the stop → that minute's open;
-   * touched inside the minute → the stop price.
+   * Option stop on finished minutes before `toMin`, minute by minute. The stop is checked first with the stop
+   * known before that minute; only then does the minute's high raise the profit lock (used from the next minute).
+   * Gap below the stop → that minute's open; touched inside the minute → the stop price.
    */
-  const checkSl = (day, toMin, nifty) => {
-    if (!pos || !(rule.slPct > 0)) return null;
-    const slPx = pos.entryPremium * (1 - rule.slPct / 100);
+  const checkStops = (day, toMin, nifty) => {
+    if (!pos) return null;
     const book = bookFor(day, pos.side, pos.strike);
-    const fromMin = pos.slDay === day.dateKey ? pos.slMin + 1 : day.dateKey === pos.date ? pos.entryMin : OPEN;
+    const fromMin = pos.stopDay === day.dateKey ? pos.stopMin + 1 : day.dateKey === pos.date ? pos.entryMin : OPEN;
     for (let m = fromMin; m < toMin && m <= LAST; m += 1) {
       const b = book.get(m);
-      if (!b || b.l > slPx) continue;
-      const open = m === pos.entryMin && day.dateKey === pos.date ? pos.entryPremium : b.o;
-      const price = open <= slPx ? open : slPx;
-      return closePos(day, m, 'SL', `Option fell to the −${rule.slPct}% stop ₹${fmt(slPx)}`, nifty, { min: m, price: price + rule.slippage });
+      if (!b) continue;
+      if (b.l <= pos.stop) {
+        const open = m === pos.entryMin && day.dateKey === pos.date ? pos.entryPremium : b.o;
+        const price = open <= pos.stop ? open : pos.stop;
+        const locked = pos.stop > pos.entryPremium;
+        const text = locked
+          ? `Option fell back to the profit lock ₹${fmt(pos.stop)} (best ₹${fmt(pos.lockPeak)})`
+          : `Option fell to the −${rule.slPct}% stop ₹${fmt(pos.stop)}`;
+        return closePos(day, m, locked ? 'LOCK' : 'SL', text, nifty, { min: m, price });
+      }
+      if (b.h > pos.lockPeak) {
+        pos.lockPeak = b.h;
+        const gain = pos.lockPeak - pos.entryPremium;
+        if (gain >= (pos.entryPremium * rule.lockAtPct) / 100) {
+          const lock = r2(pos.entryPremium + gain * rule.lockShare);
+          if (lock > pos.stop) {
+            if (pos.stop <= pos.entryPremium) {
+              pos.events.push({ time: `${day.dateKey === pos.date ? '' : `${day.dateKey.slice(5)} `}${hhmm(m)}`, text: `Option up ${Math.round((gain / pos.entryPremium) * 100)}% (₹${fmt(b.h)}) → profit lock on, stop raised to ₹${fmt(lock)}` });
+            }
+            pos.stop = lock;
+          }
+        }
+      }
     }
-    pos.slDay = day.dateKey;
-    pos.slMin = Math.min(toMin, LAST + 1) - 1;
+    pos.stopDay = day.dateKey;
+    pos.stopMin = Math.min(toMin, LAST + 1) - 1;
     return null;
   };
 
@@ -431,7 +446,9 @@ async function runBacktest({ from, to, lots = 10, rule: ruleIn = {}, onProgress,
       last: entryPremium,
       trackedDay: day.dateKey,
       trackedMin: px.min - 1,
-      adxAtSignal: extra.adx != null ? r2(extra.adx) : null,
+      stop: r2(entryPremium * (1 - rule.slPct / 100)),
+      lockPeak: entryPremium,
+      trendAtEntry: extra.trend || null,
       avgAtEntry: extra.avg != null ? r2(extra.avg) : null,
       events: [
         {
@@ -440,7 +457,7 @@ async function runBacktest({ from, to, lots = 10, rule: ruleIn = {}, onProgress,
         },
         {
           time: hhmm(px.min),
-          text: `Bought ${strike} ${side}${rule.strikeSteps ? ` (${rule.strikeSteps} ITM)` : ' (ATM)'} at the ${hhmm(px.min)} open ₹${fmt(entryPremium)} · NIFTY ${fmt(entrySpot)}${expiryDay ? ' · expiry day' : ''}${rule.slPct > 0 ? ` · SL ₹${fmt(entryPremium * (1 - rule.slPct / 100))} (−${rule.slPct}%)` : ''}`,
+          text: `Bought ${strike} ${side}${rule.strikeSteps ? ` (${rule.strikeSteps} ITM)` : ' (ATM)'} at the ${hhmm(px.min)} open ₹${fmt(entryPremium)} · NIFTY ${fmt(entrySpot)}${expiryDay ? ' · expiry day' : ''} · SL ₹${fmt(entryPremium * (1 - rule.slPct / 100))} (−${rule.slPct}%) · profit lock from ₹${fmt(entryPremium * (1 + rule.lockAtPct / 100))} (+${rule.lockAtPct}%)`,
         },
       ],
     };
@@ -464,13 +481,13 @@ async function runBacktest({ from, to, lots = 10, rule: ruleIn = {}, onProgress,
       rule.atrLength,
       rule.factor,
     );
-    const adxMap =
-      rule.adxMin > 0
-        ? adxByCandle(
-            buildCandles(days, rule.timeframe).filter((c) => c.dateKey !== now.dateKey || c.end + 1 <= now.minutes),
-            rule.adxLength,
-          )
-        : null;
+    const trendAt = trendLookup(
+      applySupertrend(
+        signalCandles(days, rule.trendTimeframe, rule.candleType, (c) => c.dateKey !== now.dateKey || c.end + 1 <= now.minutes),
+        rule.atrLength,
+        rule.factor,
+      ),
+    );
     const byDay = new Map();
     candles.forEach((c, i) => {
       c.prevDir = candles[i - 1]?.dir ?? null;
@@ -499,41 +516,39 @@ async function runBacktest({ from, to, lots = 10, rule: ruleIn = {}, onProgress,
 
       let closedForDay = false;
       let tradedToday = Boolean(pos);
-      let lossesToday = 0;
-      const countLoss = (net) => {
-        if (net != null && net < 0) lossesToday += 1;
+      let dayPnl = 0;
+      const dayLossCap = rule.dayLossPerLot * Math.max(1, Math.round(lots));
+      const addPnl = (net) => {
+        if (net != null) dayPnl += net;
       };
       const skip = (a, side, reason) => skippedSignals.push({ dateKey: day.dateKey, time: hhmm(a.min), side, reason });
       for (const a of actions) {
-        countLoss(checkSl(day, a.min, nifty));
+        addPnl(checkStops(day, a.min, nifty));
         if (a.eod) {
-          if (pos) countLoss(closePos(day, a.min, expiryDay ? 'EXPIRY' : 'DAY_CLOSE', expiryDay ? `Expiry day — ${hhmm(rule.eod)} close` : `${hhmm(rule.eod)} day close`, nifty));
+          if (pos) addPnl(closePos(day, a.min, expiryDay ? 'EXPIRY' : 'DAY_CLOSE', expiryDay ? `Expiry day — ${hhmm(rule.eod)} close` : `${hhmm(rule.eod)} day close`, nifty));
           closedForDay = true;
           continue;
         }
         const { flip } = a;
         const side = flip.dir === 1 ? 'CE' : 'PE';
         if (pos && pos.side !== side) {
-          countLoss(closePos(day, a.min, 'FLIP', `Supertrend turned ${colour(flip.dir)} (${hhmm(flip.start)} ${rule.candleType === 'heikin' ? 'HA candle close' : 'candle closed'} ${fmt(flip.c)}, line ${fmt(flip.dir === 1 ? flip.upper : flip.lower)})`, nifty));
+          addPnl(closePos(day, a.min, 'FLIP', `Supertrend turned ${colour(flip.dir)} (${hhmm(flip.start)} ${rule.candleType === 'heikin' ? 'HA candle close' : 'candle closed'} ${fmt(flip.c)}, line ${fmt(flip.dir === 1 ? flip.upper : flip.lower)})`, nifty));
         }
         if (pos || closedForDay) continue;
         if (a.min < rule.entryFrom || a.min > rule.entryTo) continue;
         if (mustClose && a.min >= rule.eod) continue;
 
         const checks = [];
-        if (rule.maxLossesPerDay > 0 && lossesToday >= rule.maxLossesPerDay) {
-          skip(a, side, `${lossesToday} losses today — stopped for the day`);
+        if (dayPnl <= -dayLossCap) {
+          skip(a, side, `Day loss ${formatInr(dayPnl)} hit the ₹${dayLossCap.toLocaleString('en-IN')} cap — no more entries today`);
           continue;
         }
-        let adx = null;
-        if (rule.adxMin > 0) {
-          adx = adxMap.get(`${flip.dateKey}|${flip.start}`);
-          if (!(adx >= rule.adxMin)) {
-            skip(a, side, `ADX ${adx != null ? r2(adx) : '—'} < ${rule.adxMin} (sideways)`);
-            continue;
-          }
-          checks.push(`ADX ${r2(adx)} ≥ ${rule.adxMin}`);
+        const trend = trendAt(day.dateKey, a.min);
+        if (!trend || trend.dir !== flip.dir) {
+          skip(a, side, `${rule.trendTimeframe}-min Supertrend is ${trend ? colour(trend.dir) : 'not ready'} (against the flip)`);
+          continue;
         }
+        checks.push(`${rule.trendTimeframe}-min Supertrend ${colour(trend.dir)} (${trend.time} candle, line ${fmt(trend.line)})`);
         let avg = null;
         if (rule.avgFilter) {
           const ra = runningAverage(nifty, a.min - 1);
@@ -545,10 +560,10 @@ async function runBacktest({ from, to, lots = 10, rule: ruleIn = {}, onProgress,
           }
           checks.push(`NIFTY ${fmt(ra.last)} ${side === 'CE' ? 'above' : 'below'} running avg ${fmt(ra.avg)}`);
         }
-        const why = openPos(day, a.min, flip, nifty, expiryDay, { adx, avg, checks });
+        const why = openPos(day, a.min, flip, nifty, expiryDay, { trend: `${colour(trend.dir)} ${trend.time}`, avg, checks });
         if (!why) tradedToday = true;
       }
-      if (pos) countLoss(checkSl(day, LAST + 1, nifty));
+      if (pos) checkStops(day, LAST + 1, nifty);
       if (pos) track(day, LAST);
       if (!tradedToday) flatDays.push(day.dateKey);
       lastDay = day;

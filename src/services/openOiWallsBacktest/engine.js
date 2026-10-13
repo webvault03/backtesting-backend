@@ -6,8 +6,7 @@
  *     Put wall = largest |Put ΔOI| → buy CE · Call wall = largest |Call ΔOI| → buy PE. Strikes within
  *     ±lookaround strikes of spot (Dhan history has ATM±10). Like live: if a side has no ΔOI yet, wait for
  *     the next minute's OI (up to 09:20), then fall back to the largest absolute OI.
- *   Same-strike filter (backtest only, off by default): put and call wall on one strike → no trade that day.
- *   Entry (walls known → 10:15): a minute that opens inside ±proximity of a wall fills at that option open;
+ *   Same-strike filter (backtest only, off by default): put and call wall on one strike → no trade that day. *   Entry (walls known → 10:15): a minute that opens inside ±proximity of a wall fills at that option open;
  *     a touch inside a minute fills at the next minute's option open (1-min data has no ticks — the next
  *     real price is used, never a guess from the touched minute's range). One trade per day.
  *   Exit (live trail): peak +20/+30/+40/+50/+70 locks +10/+20/+25/+30/+50, from +40 also peak − 20;
