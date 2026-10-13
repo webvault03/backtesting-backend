@@ -6,6 +6,7 @@
  *     Put wall = largest |Put ΔOI| → buy CE · Call wall = largest |Call ΔOI| → buy PE. Strikes within
  *     ±lookaround strikes of spot (Dhan history has ATM±10). Like live: if a side has no ΔOI yet, wait for
  *     the next minute's OI (up to 09:20), then fall back to the largest absolute OI.
+ *   Same-strike filter (backtest only, optional): put and call wall on one strike → no trade that day.
  *   Entry (walls known → 10:15): a minute that opens inside ±proximity of a wall fills at that option open;
  *     a touch inside a minute fills at the next minute's option open (1-min data has no ticks — the next
  *     real price is used, never a guess from the touched minute's range). One trade per day.
@@ -15,6 +16,7 @@
  */
 const { addDays, ensureDays, loadDays } = require('./dataSource');
 const { TRAIL_RUNGS, PEAK_TRAIL_GAP, computeTrailLockPoints } = require('../../utils/openOiWallsTrail');
+const { rangeChunks, chunkProgress } = require('../backtestChunks');
 
 /** First day Dhan has weekly NIFTY option minute history. */
 const HISTORY_START = '2020-08-03';
@@ -34,6 +36,7 @@ const DEFAULT_RULE = {
   entryTo: 10 * 60 + 15,
   eod: 15 * 60 + 15,
   slippage: 0,
+  skipSameStrike: true,
 };
 
 const r2 = (n) => Number(Number(n).toFixed(2));
@@ -275,6 +278,11 @@ function runDay({ day, prev, rule, qty }) {
   const cap = captureWalls(day, prev, nifty, rule, events);
   if (!cap) return { skipped: 'no OI at 09:15' };
   const dayInfo = { walls: cap.walls, baseline: cap.baseline, spotAtCapture: cap.spotAtCapture };
+  const putWall = cap.walls.find((w) => w.side === 'PUT');
+  const callWall = cap.walls.find((w) => w.side === 'CALL');
+  if (rule.skipSameStrike && putWall && callWall && putWall.strike === callWall.strike) {
+    return { skipped: `put and call wall on the same strike ${putWall.strike} — no trade`, ...dayInfo };
+  }
 
   const hit = findEntry(nifty, day, cap.walls, cap.captureMin + 1, rule, events);
   if (!hit) return { skipped: `spot never within ±${rule.proximity} of a wall by ${hhmm(rule.entryTo)}`, ...dayInfo };
@@ -366,39 +374,50 @@ function summarize(trades) {
 }
 
 /**
- * @param {{ from: string, to: string, lots?: number, rule?: Partial<typeof DEFAULT_RULE>, onProgress?: Function }} opts
+ * Runs in 25-day pieces: each piece is downloaded, simulated and published via `onPartial` before the
+ * next piece is fetched.
+ * @param {{ from: string, to: string, lots?: number, rule?: Partial<typeof DEFAULT_RULE>, onProgress?: Function, onPartial?: Function }} opts
  */
-async function runBacktest({ from, to, lots = 10, rule: ruleIn = {}, onProgress } = {}) {
+async function runBacktest({ from, to, lots = 10, rule: ruleIn = {}, onProgress, onPartial } = {}) {
   const rule = { ...DEFAULT_RULE, ...ruleIn };
   const qty = Math.max(1, Math.round(lots)) * rule.lotSize;
-  const fetchFrom = addDays(from, -WARMUP_DAYS);
-  const live = await ensureDays(fetchFrom, to, { onProgress });
-  const days = loadDays(fetchFrom, to, live);
-
   const trades = [];
   const skippedDays = [];
-  const total = days.filter((d) => d.dateKey >= from).length;
-  let done = 0;
-  days.forEach((day, i) => {
-    if (day.dateKey < from) return;
-    onProgress?.({ phase: 'simulate', done, total, dateKey: day.dateKey });
-    done += 1;
-    const r = runDay({ day, prev: days[i - 1], rule, qty });
-    if (r.trade) trades.push(r.trade);
-    else skippedDays.push({ dateKey: day.dateKey, reason: r.skipped, walls: r.walls || [], spotAtCapture: r.spotAtCapture ?? null });
-  });
-
-  return {
+  let tradingDays = 0;
+  const build = (doneThrough) => ({
     from,
     to,
     lots,
     qty,
     rule: { ...rule, unarmedExit: hhmm(rule.unarmedExit), entryTo: hhmm(rule.entryTo), eod: hhmm(rule.eod) },
-    tradingDays: total,
-    skippedDays,
+    tradingDays,
+    skippedDays: [...skippedDays],
     summary: summarize(trades),
-    trades,
-  };
+    trades: [...trades],
+    ...(doneThrough ? { doneThrough } : {}),
+  });
+
+  const chunks = rangeChunks(from, to, { warmupDays: WARMUP_DAYS });
+  for (const [ci, chunk] of chunks.entries()) {
+    const report = chunkProgress(onProgress, ci, chunks.length, chunk.label, () => ({ tradesSoFar: trades.length }));
+    const fetchFrom = addDays(chunk.from, -WARMUP_DAYS);
+    const live = await ensureDays(fetchFrom, chunk.to, { onProgress: report });
+    const days = loadDays(fetchFrom, chunk.to, live);
+    const total = days.filter((d) => d.dateKey >= chunk.from).length;
+    let done = 0;
+    days.forEach((day, i) => {
+      if (day.dateKey < chunk.from) return;
+      report({ phase: 'simulate', done, total, dateKey: day.dateKey });
+      done += 1;
+      const r = runDay({ day, prev: days[i - 1], rule, qty });
+      if (r.trade) trades.push(r.trade);
+      else skippedDays.push({ dateKey: day.dateKey, reason: r.skipped, walls: r.walls || [], spotAtCapture: r.spotAtCapture ?? null });
+    });
+    tradingDays += total;
+    onPartial?.(build(chunk.to));
+  }
+
+  return build(null);
 }
 
 module.exports = { runBacktest, DEFAULT_RULE, HISTORY_START };

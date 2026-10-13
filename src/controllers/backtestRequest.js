@@ -33,12 +33,12 @@ function jobHandlers(kind, parseRequest, runBacktest) {
     } catch (err) {
       return res.status(400).json({ ok: false, error: err.message });
     }
-    const { busy, job } = startJob(kind, params, (onProgress) => runBacktest({ ...params, onProgress }));
+    const { busy, job } = startJob(kind, params, (onProgress, onPartial) => runBacktest({ ...params, onProgress, onPartial }));
     if (busy) return res.status(409).json({ ok: false, error: 'A backtest is already running', job });
     return res.status(202).json({ ok: true, job });
   };
   const status = (req, res) => {
-    const job = getJob(req.params.jobId);
+    const job = getJob(req.params.jobId, Number(req.query.have) || 0);
     if (!job) return res.status(404).json({ ok: false, error: 'Job not found or expired' });
     return res.json({ ok: true, job });
   };

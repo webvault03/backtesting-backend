@@ -26,8 +26,6 @@ const {
 const {
   postOiTrailBacktestRun,
   getOiTrailBacktestJob,
-  postEma5BreakoutBacktestRun,
-  getEma5BreakoutBacktestJob,
   postShortStraddleBacktestRun,
   getShortStraddleBacktestJob,
   postGappingPlayBacktestRun,
@@ -166,8 +164,6 @@ router.post('/backtest/oi-candle-agree/run', postOiCandleAgreeBacktestRun);
 router.get('/backtest/oi-candle-agree/jobs/:jobId', getOiCandleAgreeBacktestJob);
 router.post('/backtest/oi-trail/run', postOiTrailBacktestRun);
 router.get('/backtest/oi-trail/jobs/:jobId', getOiTrailBacktestJob);
-router.post('/backtest/ema5-breakout/run', postEma5BreakoutBacktestRun);
-router.get('/backtest/ema5-breakout/jobs/:jobId', getEma5BreakoutBacktestJob);
 router.post('/backtest/short-straddle-next-day/run', postShortStraddleBacktestRun);
 router.get('/backtest/short-straddle-next-day/jobs/:jobId', getShortStraddleBacktestJob);
 router.post('/backtest/gapping-play/run', postGappingPlayBacktestRun);
@@ -176,7 +172,6 @@ router.post('/backtest/cvd-oi/run', postCvdOiBacktestRun);
 router.get('/backtest/cvd-oi/jobs/:jobId', getCvdOiBacktestJob);
 router.post('/backtest/open-oi-walls/run', postOpenOiWallsBacktestRun);
 router.get('/backtest/open-oi-walls/jobs/:jobId', getOpenOiWallsBacktestJob);
-
 router.get('/liquidity-oi-chase/chart', getLiquidityOiChaseChart);
 router.get('/liquidity-oi-chase/avg-buy-sell', getNiftyAvgBuySell);
 

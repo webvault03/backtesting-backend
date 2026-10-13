@@ -1,5 +1,4 @@
 const oiTrail = require('../services/oiTrailBacktest/engine');
-const ema5 = require('../services/ema5BreakoutBacktest/engine');
 const shortStraddle = require('../services/shortStraddleBacktest/engine');
 const gappingPlay = require('../services/gappingPlayBacktest/engine');
 const cvdOi = require('../services/cvdOiBacktest/engine');
@@ -17,26 +16,6 @@ const oiTrailHandlers = jobHandlers(
     },
   }),
   oiTrail.runBacktest,
-);
-
-const ema5Handlers = jobHandlers(
-  'ema5-breakout',
-  (body) => {
-    const d = ema5.DEFAULT_RULE;
-    const dayStop = numberIn(body.dayStop, 0, 1e7, d.dayStop);
-    return {
-      ...parseDateRange(body),
-      lots: parseLots(body.lots),
-      rule: {
-        slPoints: numberIn(body.slPoints, 1, 500, d.slPoints),
-        trailAfter: numberIn(body.trailAfter, 0, 500, d.trailAfter),
-        trailGap: numberIn(body.trailGap, 0.5, 500, d.trailGap),
-        dayStop: dayStop > 0 ? dayStop : Infinity,
-        slippage: numberIn(body.slippage, 0, 5, d.slippage),
-      },
-    };
-  },
-  ema5.runBacktest,
 );
 
 const shortStraddleHandlers = jobHandlers(
@@ -136,7 +115,9 @@ const openOiWallsHandlers = jobHandlers(
         emergencySl: numberIn(body.emergencySl, 0, 500, d.emergencySl),
         unarmedExit: clockIn(body.unarmedExit, 9 * 60 + 20, 15 * 60 + 25, d.unarmedExit),
         entryTo: clockIn(body.entryTo, 9 * 60 + 16, 15 * 60, d.entryTo),
-        slippage: numberIn(body.slippage, 0, 5, d.slippage),      },
+        slippage: numberIn(body.slippage, 0, 5, d.slippage),
+        skipSameStrike: typeof body.skipSameStrike === 'boolean' ? body.skipSameStrike : d.skipSameStrike,
+      },
     };
   },
   openOiWalls.runBacktest,
@@ -153,6 +134,4 @@ module.exports = {
   getShortStraddleBacktestJob: shortStraddleHandlers.status,
   postOiTrailBacktestRun: oiTrailHandlers.run,
   getOiTrailBacktestJob: oiTrailHandlers.status,
-  postEma5BreakoutBacktestRun: ema5Handlers.run,
-  getEma5BreakoutBacktestJob: ema5Handlers.status,
 };

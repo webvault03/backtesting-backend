@@ -15,7 +15,17 @@ function pruneJobs() {
   }
 }
 
-function publicJob(job) {
+/**
+ * `have` = trades the client already holds from earlier polls; a running job's partial result only
+ * carries trades from that index on (`tradesOffset`), so long runs do not resend the whole list.
+ */
+function publicJob(job, have = 0) {
+  let partial = null;
+  if (job.status === 'running' && job.partial) {
+    const all = job.partial.trades || [];
+    const offset = Math.min(Math.max(0, have), all.length);
+    partial = { ...job.partial, trades: all.slice(offset), tradesOffset: offset, tradesTotal: all.length };
+  }
   return {
     jobId: job.id,
     kind: job.kind,
@@ -25,11 +35,15 @@ function publicJob(job) {
     error: job.error,
     startedAt: job.startedAt,
     finishedAt: job.finishedAt,
+    partial,
     result: job.status === 'done' ? job.result : null,
   };
 }
 
-/** Starts `run(onProgress)` in the background. Returns `{ busy: true, job }` when another run is active. */
+/**
+ * Starts `run(onProgress, onPartial)` in the background. `onPartial(result)` publishes results so far
+ * (same shape as the final result). Returns `{ busy: true, job }` when another run is active.
+ */
 function startJob(kind, params, run) {
   pruneJobs();
   if (activeJobId) {
@@ -43,6 +57,7 @@ function startJob(kind, params, run) {
     params,
     progress: { phase: 'start', done: 0, total: 0 },
     error: null,
+    partial: null,
     result: null,
     startedAt: Date.now(),
     finishedAt: null,
@@ -51,9 +66,10 @@ function startJob(kind, params, run) {
   activeJobId = job.id;
 
   Promise.resolve()
-    .then(() => run((p) => { job.progress = p; }))
+    .then(() => run((p) => { job.progress = p; }, (partial) => { job.partial = partial; }))
     .then((result) => {
       job.result = result;
+      job.partial = null;
       job.status = 'done';
     })
     .catch((err) => {
@@ -68,9 +84,9 @@ function startJob(kind, params, run) {
   return { busy: false, job: publicJob(job) };
 }
 
-function getJob(jobId) {
+function getJob(jobId, have = 0) {
   const job = jobs.get(jobId);
-  return job ? publicJob(job) : null;
+  return job ? publicJob(job, have) : null;
 }
 
 module.exports = { startJob, getJob };
