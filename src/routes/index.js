@@ -40,6 +40,7 @@ const {
   postHaEma9BacktestRun,
   getHaEma9BacktestJob,
 } = require('../controllers/strategyRunBacktestController');
+const { postOiStrikeReportRun, getOiStrikeReportJob } = require('../controllers/oiStrikeReportController');
 const {
   getStatus: getLiveStatus,
   startLive,
@@ -182,6 +183,8 @@ router.get('/backtest/supertrend/jobs/:jobId', getSupertrendBacktestJob);
 router.get('/backtest/supertrend/chart', getSupertrendChart);
 router.post('/backtest/ha-ema9/run', postHaEma9BacktestRun);
 router.get('/backtest/ha-ema9/jobs/:jobId', getHaEma9BacktestJob);
+router.post('/report/oi-strikes/run', postOiStrikeReportRun);
+router.get('/report/oi-strikes/jobs/:jobId', getOiStrikeReportJob);
 router.get('/liquidity-oi-chase/chart', getLiquidityOiChaseChart);
 router.get('/liquidity-oi-chase/avg-buy-sell', getNiftyAvgBuySell);
 

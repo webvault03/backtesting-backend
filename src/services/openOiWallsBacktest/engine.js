@@ -423,4 +423,4 @@ async function runBacktest({ from, to, lots = 10, rule: ruleIn = {}, onProgress,
   return build(null);
 }
 
-module.exports = { runBacktest, DEFAULT_RULE, HISTORY_START };
+module.exports = { runBacktest, pickBaseline, DEFAULT_RULE, HISTORY_START };

@@ -8,12 +8,17 @@
  *   A run resets when a candle touches / crosses EMA 9.
  * Execution:
  *   Buy the ATM option at the open of the first minute after the signal candle closes. One trade per day.
- *   Stop (on NIFTY, fixed): PE → signal candle HA high; CE → signal candle HA low.
- *   Stop hit when a NIFTY 1-min bar trades through it; the option is sold at the next minute open
- *   (or that minute's open when NIFTY opened beyond the stop).
- *   Trail (option points, no fixed target): best gain +10 → lock +5, +15 → +10, +20 → +15 …
- *   A new lock is used from the next minute; falling to it sells at the lock (that minute's open if it opened below).
- *   The NIFTY stop is checked first in every minute. Anything open is sold at `eod`.
+ *   Optional big-candle filter: skip the signal when its HA high − low exceeds `maxCandlePts` (the day's trade stays free).
+ *   Optional NIFTY stop (niftySl): PE → signal candle real NIFTY high, CE → real NIFTY low. Checked first every minute
+ *   on NIFTY 1-min bars; when NIFTY trades through it the option is sold at the next minute open (that minute's open
+ *   when NIFTY opened beyond the stop).
+ *   Option-price exits, each on its own switch:
+ *   - trail (default on): best +10 → lock +5 (still +5 at +15), then every +10 → lock 10 below it
+ *     (+20 → +10, +30 → +20, +40 → +30 …). A new lock is used from the next minute; falling to it sells at the
+ *     lock (that minute's open if it opened below).
+ *   - useTarget (default off = no target): entry + `target` option points (default 10); sold at the target
+ *     (that minute's open when the option opened above it).
+ *   Anything open is sold at `eod`.
  */
 const { addDays, ensureDays, loadDays } = require('../oiCandleAgreeBacktest/dataSource');
 const { rangeChunks, chunkProgress } = require('../backtestChunks');
@@ -34,10 +39,16 @@ const DEFAULT_RULE = {
   entryTo: 15 * 60,
   eod: 15 * 60 + 15,
   maxTradesPerDay: 1,
-  /** Option-point trail: at +trailStart lock +(trailStart − trailGap), then every +trailStep more locks trailStep more. */
-  trailStart: 10,
-  trailStep: 5,
-  trailGap: 5,
+  /** Stop loss on NIFTY at the signal candle's real high (PE) / low (CE). */
+  niftySl: false,
+  /** Trail the option profit (see trailLock). */
+  trail: true,
+  /** Fixed target in option points above the buy price; off = no target. Works with or without the trail. */
+  useTarget: false,
+  target: 10,
+  /** When on, a signal candle whose HA high − low is above maxCandlePts (NIFTY pts) is not traded. */
+  skipBigCandle: false,
+  maxCandlePts: 40,
   slippage: 0,
 };
 
@@ -45,6 +56,13 @@ const r2 = (n) => Number(Number(n).toFixed(2));
 const hhmm = (m) => `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
 const fmt = (n) => Number(n).toLocaleString('en-IN', { maximumFractionDigits: 2, minimumFractionDigits: 2 });
 const span = (c) => `${hhmm(c.start)}–${hhmm(c.end + 1)}`;
+
+/** Locked option points for a best gain: <10 → none, 10–19.99 → 5, then floor to 10s minus 10 (20 → 10, 30 → 20 …). */
+function trailLock(gain) {
+  if (gain < 10) return null;
+  if (gain < 20) return 5;
+  return Math.floor(gain / 10) * 10 - 10;
+}
 
 /** F&O option charges for one buy + one sell (₹20/order brokerage, STT, exchange, SEBI, GST, stamp). */
 function optionCharges(buyValue, sellValue) {
@@ -252,6 +270,11 @@ async function runBacktest({ from, to, lots = 10, rule: ruleIn = {}, onProgress,
           skip(`candle closes after ${hhmm(rule.entryTo)}`);
           continue;
         }
+        const candlePts = r2(sc.h - sc.l);
+        if (rule.skipBigCandle && candlePts > rule.maxCandlePts) {
+          skip(`big candle ${candlePts} pts (max ${rule.maxCandlePts})`);
+          continue;
+        }
         const spot = nifty.get(entryMin)?.o;
         if (!Number.isFinite(spot)) {
           skip(`no NIFTY bar at ${hhmm(entryMin)}`);
@@ -267,11 +290,11 @@ async function runBacktest({ from, to, lots = 10, rule: ruleIn = {}, onProgress,
         taken += 1;
 
         const pe = side === 'PE';
-        const stop = pe ? sc.h : sc.l;
         const entryPremium = r2(px.price + rule.slippage);
         const entrySpot = r2(nifty.get(px.min)?.o ?? spot);
-        const risk = Math.abs(stop - entrySpot);
-        /** Locked option points (null until the first step) and the option price that sells at the lock. */
+        const targetPx = rule.useTarget ? r2(entryPremium + rule.target) : null;
+        const stop = rule.niftySl ? (pe ? sc.rh : sc.rl) : null;
+        const risk = stop != null ? r2(Math.abs(stop - entrySpot)) : null;
         let lockPts = null;
         let lockPx = null;
         const events = [
@@ -281,7 +304,7 @@ async function runBacktest({ from, to, lots = 10, rule: ruleIn = {}, onProgress,
           },
           {
             time: hhmm(px.min),
-            text: `Bought ${strike} ${side} (ATM) at the ${hhmm(px.min)} open ₹${fmt(entryPremium)} · NIFTY ${fmt(entrySpot)} · SL on NIFTY ${fmt(stop)} = signal candle HA ${pe ? 'high' : 'low'} (risk ${fmt(risk)} NIFTY pts) · trail: +${rule.trailStart} option pts → lock +${rule.trailStart - rule.trailGap}, then every +${rule.trailStep} more`,
+            text: `Bought ${strike} ${side} (ATM) at the ${hhmm(px.min)} open ₹${fmt(entryPremium)} · NIFTY ${fmt(entrySpot)} · ${rule.trail ? 'trail: +10 → lock +5, +20 → +10, +30 → +20 …' : 'no trail'} · ${targetPx != null ? `target +${rule.target} option pts = ₹${fmt(targetPx)}` : 'no target'} · ${stop != null ? `SL on NIFTY ${fmt(stop)} = signal candle ${pe ? 'high' : 'low'} (risk ${fmt(risk)} NIFTY pts)` : 'no stop loss'}`,
           },
         ];
 
@@ -291,8 +314,7 @@ async function runBacktest({ from, to, lots = 10, rule: ruleIn = {}, onProgress,
         let exit = null;
         const endMin = Math.min(rule.eod, lastMin + 1);
         for (let m = px.min; m < endMin; m += 1) {
-          const n = nifty.get(m);
-          const b = book.get(m);
+          const n = stop != null ? nifty.get(m) : null;
           if (n) {
             const gapped = pe ? n.o >= stop : n.o <= stop;
             const touched = pe ? n.h >= stop : n.l <= stop;
@@ -307,27 +329,33 @@ async function runBacktest({ from, to, lots = 10, rule: ruleIn = {}, onProgress,
               break;
             }
           }
-          if (b && lockPx != null && b.l <= lockPx) {
-            const price = b.o <= lockPx ? b.o : lockPx;
-            low = Math.min(low, b.l);
-            exit = { fill: { min: m, price }, min: m, type: 'TRAIL', text: `Option fell back to the trailing lock ₹${fmt(lockPx)} (+${lockPts} pts, best ₹${fmt(peak)})` };
+          const b = book.get(m);
+          if (!b) continue;
+          if (rule.trail) {
+            if (lockPx != null && b.l <= lockPx) {
+              const price = b.o <= lockPx ? b.o : lockPx;
+              low = Math.min(low, price);
+              exit = { fill: { min: m, price }, min: m, type: 'TRAIL', text: `Option fell back to the trailing lock ₹${fmt(lockPx)} (+${lockPts} pts, best ₹${fmt(peak)})` };
+              break;
+            }
+            const gain = b.h - entryPremium;
+            const pts = trailLock(gain);
+            if (pts != null && (lockPts == null || pts > lockPts)) {
+              lockPts = pts;
+              lockPx = r2(entryPremium + pts);
+              events.push({ time: hhmm(m), text: `Option high ₹${fmt(b.h)} (+${r2(gain)} pts) → trailing lock +${pts} pts = ₹${fmt(lockPx)}` });
+            }
+          }
+          if (targetPx != null && b.h >= targetPx) {
+            const price = m > px.min && b.o >= targetPx ? b.o : targetPx;
+            peak = Math.max(peak, b.h);
+            low = Math.min(low, b.o, price);
+            exit = { fill: { min: m, price }, min: m, type: 'TARGET', text: `Option reached ₹${fmt(b.h)} → target ₹${fmt(targetPx)} (+${rule.target} pts) hit` };
             break;
           }
-          if (b) {
-            const gain = b.h - entryPremium;
-            if (gain >= rule.trailStart) {
-              const steps = Math.floor((gain - rule.trailStart) / rule.trailStep);
-              const pts = rule.trailStart - rule.trailGap + steps * rule.trailStep;
-              if (lockPts == null || pts > lockPts) {
-                lockPts = pts;
-                lockPx = r2(entryPremium + pts);
-                events.push({ time: hhmm(m), text: `Option high ₹${fmt(b.h)} (+${r2(gain)} pts) → trailing lock +${pts} pts = ₹${fmt(lockPx)}` });
-              }
-            }
-            peak = Math.max(peak, b.h);
-            low = Math.min(low, b.l);
-            last = b.c;
-          }
+          peak = Math.max(peak, b.h);
+          low = Math.min(low, b.l);
+          last = b.c;
         }
         if (!exit) {
           const open = isToday && lastMin + 1 < rule.eod;
@@ -356,10 +384,12 @@ async function runBacktest({ from, to, lots = 10, rule: ruleIn = {}, onProgress,
           strike,
           signalTime: span(sc),
           signalCandle: { o: r2(sc.o), h: r2(sc.h), l: r2(sc.l), c: r2(sc.c), ro: r2(sc.ro), rh: r2(sc.rh), rl: r2(sc.rl), rc: r2(sc.rc) },
+          candlePts,
           ema: r2(sc.ema),
           gapFromEma: r2(side === 'PE' ? sc.l - sc.ema : sc.ema - sc.h),
-          stop: r2(stop),
-          riskPts: r2(risk),
+          stop: stop != null ? r2(stop) : null,
+          riskPts: risk,
+          targetPremium: targetPx,
           lockPts,
           lockPremium: lockPx,
           entryTime: hhmm(px.min),
@@ -373,7 +403,7 @@ async function runBacktest({ from, to, lots = 10, rule: ruleIn = {}, onProgress,
           niftyPts: r2(side === 'CE' ? exitSpot - entrySpot : entrySpot - exitSpot),
           exitPremium,
           exitType: exit.type,
-          exitReason: { SL: 'Stop loss', TRAIL: 'Trailing lock', EOD: `${hhmm(rule.eod)} close`, OPEN: 'Still open (marked)' }[exit.type],
+          exitReason: { SL: 'Stop loss (NIFTY)', TARGET: `Target +${rule.target}`, TRAIL: `Trailing lock +${lockPts}`, EOD: `${hhmm(rule.eod)} close`, OPEN: 'Still open (marked)' }[exit.type],
           points,
           grossPnL,
           charges,
