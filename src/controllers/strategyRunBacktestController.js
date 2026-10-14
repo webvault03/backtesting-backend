@@ -153,12 +153,8 @@ const haEma9Handlers = jobHandlers(
       to: range.to,
       lots: parseLots(body.lots),
       rule: {
-        niftySl: body.niftySl === true || body.niftySl === 'true',
-        trail: body.trail == null ? haEma9.DEFAULT_RULE.trail : body.trail === true || body.trail === 'true',
-        useTarget: body.useTarget === true || body.useTarget === 'true',
-        target: numberIn(body.target, 1, 200, haEma9.DEFAULT_RULE.target),
-        skipBigCandle: body.skipBigCandle === true || body.skipBigCandle === 'true',
-        maxCandlePts: numberIn(body.maxCandlePts, 1, 500, haEma9.DEFAULT_RULE.maxCandlePts),
+        maxCandlePts: numberIn(body.maxCandlePts, 1, 200, haEma9.DEFAULT_RULE.maxCandlePts),
+        rr: numberIn(body.rr, 0.25, 10, haEma9.DEFAULT_RULE.rr),
         slippage: numberIn(body.slippage, 0, 5, haEma9.DEFAULT_RULE.slippage),
       },
     };
