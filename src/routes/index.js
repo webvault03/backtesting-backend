@@ -34,9 +34,6 @@ const {
   getCvdOiBacktestJob,
   postOpenOiWallsBacktestRun,
   getOpenOiWallsBacktestJob,
-  postSupertrendBacktestRun,
-  getSupertrendBacktestJob,
-  getSupertrendChart,
   postHaEma9BacktestRun,
   getHaEma9BacktestJob,
 } = require('../controllers/strategyRunBacktestController');
@@ -83,6 +80,7 @@ const {
   getOiFlowArchives,
   getOiFlowArchiveDownload,
   getOiFlowHeaderSignal,
+  getOiFlowHeaderSignalHistory,
   getOiFlowSignals,
   postOiFlowSignalsBackfill,
 } = require('../controllers/oiFlowController');
@@ -163,6 +161,7 @@ router.get('/oi-flow/day/:dateKey', getOiFlowDay);
 router.get('/oi-flow/archives', getOiFlowArchives);
 router.get('/oi-flow/archives/:dateKey/download', getOiFlowArchiveDownload);
 router.get('/oi-flow/header-signal', getOiFlowHeaderSignal);
+router.get('/oi-flow/header-signal/history', getOiFlowHeaderSignalHistory);
 router.get('/oi-flow/signals', getOiFlowSignals);
 router.post('/oi-flow/signals/backfill', postOiFlowSignalsBackfill);
 
@@ -178,9 +177,6 @@ router.post('/backtest/cvd-oi/run', postCvdOiBacktestRun);
 router.get('/backtest/cvd-oi/jobs/:jobId', getCvdOiBacktestJob);
 router.post('/backtest/open-oi-walls/run', postOpenOiWallsBacktestRun);
 router.get('/backtest/open-oi-walls/jobs/:jobId', getOpenOiWallsBacktestJob);
-router.post('/backtest/supertrend/run', postSupertrendBacktestRun);
-router.get('/backtest/supertrend/jobs/:jobId', getSupertrendBacktestJob);
-router.get('/backtest/supertrend/chart', getSupertrendChart);
 router.post('/backtest/ha-ema9/run', postHaEma9BacktestRun);
 router.get('/backtest/ha-ema9/jobs/:jobId', getHaEma9BacktestJob);
 router.post('/report/oi-strikes/run', postOiStrikeReportRun);

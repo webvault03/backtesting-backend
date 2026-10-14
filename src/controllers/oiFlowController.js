@@ -5,6 +5,7 @@ const {
 } = require('../services/oiFlowLiveSignalStore');
 const { getIstClock } = require('../utils/dateTime');
 const archiveService = require('../services/oiFlowDayArchiveService');
+const headerSignalHistory = require('../services/oiFlowHeaderSignalHistory');
 
 async function getOiFlowStatus(_req, res) {
   try {
@@ -94,6 +95,19 @@ async function getOiFlowHeaderSignal(_req, res) {
   }
 }
 
+/** GET /api/oi-flow/header-signal/history?date=YYYY-MM-DD — every CALL BUY / PUT BUY / WAIT switch of the day. */
+async function getOiFlowHeaderSignalHistory(req, res) {
+  try {
+    const clock = getIstClock(new Date());
+    const raw = String(req.query.date || '').trim();
+    const dateKey = /^\d{4}-\d{2}-\d{2}$/.test(raw) ? raw : clock.dateKey;
+    const data = await headerSignalHistory.getDayHistory(dateKey);
+    return res.json({ ok: true, ...data });
+  } catch (error) {
+    return res.status(500).json({ ok: false, error: error.message });
+  }
+}
+
 async function getOiFlowSignals(req, res) {
   try {
     const clock = getIstClock(new Date());
@@ -125,6 +139,7 @@ module.exports = {
   getOiFlowArchives,
   getOiFlowArchiveDownload,
   getOiFlowHeaderSignal,
+  getOiFlowHeaderSignalHistory,
   getOiFlowSignals,
   postOiFlowSignalsBackfill,
 };

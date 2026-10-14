@@ -46,8 +46,9 @@ const TO = '2026-10-13';
         break;
       } catch (e) {
         console.log(`${cursor.slice(0, 7)} attempt ${attempt} failed: ${e.message}`);
-        if (attempt >= 4) throw e;
+        if (attempt >= 6) throw e;
         await new Promise((r) => setTimeout(r, 15000 * attempt));
+        await require('../src/services/dhanTokenPersistence').hydrateDhanTokenFromMongo();
       }
     }
     cursor = ds.addDays(monthEnd, 1);
