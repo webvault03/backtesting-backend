@@ -1,5 +1,5 @@
 /**
- * Stock Manual desk (stock futures only, no day-close).
+ * Stock Manual desk (stock options from the option chain, carry forward, auto-exit at expiry).
  * Separate paper wallet + trades from Index Manual (walletKey paper_live_manual_stock).
  */
 const stockEngine = require('../services/manualTradeEngine');
@@ -81,9 +81,23 @@ async function getManualStockFutureQuote(req, res) {
   }
 }
 
+async function getManualStockChain(req, res) {
+  try {
+    const data = await withStockDesk(() =>
+      stockEngine.getChainAroundAtm({
+        symbol: req.query?.symbol,
+        expiry: req.query?.expiry,
+      }),
+    );
+    return res.json({ ok: true, ...data });
+  } catch (error) {
+    return res.status(400).json({ ok: false, error: error.message });
+  }
+}
+
 async function postManualStockOrder(req, res) {
   try {
-    const body = { ...(req.body || {}), product: 'FUTURE' };
+    const body = { ...(req.body || {}), product: 'OPTION' };
     const result = await withStockDesk(async () => {
       await stockEngine.ensureEngineRunning('stock');
       return stockEngine.createOrder(body);
@@ -227,6 +241,7 @@ module.exports = {
   getManualStockQuote,
   getManualStockInstruments,
   getManualStockFutureQuote,
+  getManualStockChain,
   postManualStockOrder,
   deleteManualStockOrder,
   postManualStockClosePosition,

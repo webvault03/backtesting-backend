@@ -4,6 +4,9 @@ const gappingPlay = require('../services/gappingPlayBacktest/engine');
 const cvdOi = require('../services/cvdOiBacktest/engine');
 const openOiWalls = require('../services/openOiWallsBacktest/engine');
 const haEma9 = require('../services/haEma9Backtest/engine');
+const oiStrikeFlow = require('../services/oiStrikeFlowBacktest/engine');
+const strategy1Pro = require('../services/strategy1ProBacktest/engine');
+const niftyChampion = require('../services/niftyChampionBacktest/engine');
 const { parseDateRange, numberIn, parseLots, jobHandlers } = require('./backtestRequest');
 
 const oiTrailHandlers = jobHandlers(
@@ -113,11 +116,12 @@ const openOiWallsHandlers = jobHandlers(
         lotSize: Math.round(numberIn(body.lotSize, 1, 500, d.lotSize)),
         charges: numberIn(body.charges, 0, 10000, d.charges),
         proximity: numberIn(body.proximity, 5, 200, d.proximity),
-        emergencySl: numberIn(body.emergencySl, 0, 500, d.emergencySl),
-        unarmedExit: clockIn(body.unarmedExit, 9 * 60 + 20, 15 * 60 + 25, d.unarmedExit),
+        targets: Array.isArray(body.targets)
+          ? [...new Set(body.targets.map(Number).filter((n) => n >= 1 && n <= 1000))].sort((a, b) => a - b).slice(0, 10)
+          : d.targets,
         entryTo: clockIn(body.entryTo, 9 * 60 + 16, 15 * 60, d.entryTo),
         slippage: numberIn(body.slippage, 0, 5, d.slippage),
-        skipSameStrike: typeof body.skipSameStrike === 'boolean' ? body.skipSameStrike : d.skipSameStrike,      },
+      },
     };
   },
   openOiWalls.runBacktest,
@@ -142,7 +146,85 @@ const haEma9Handlers = jobHandlers(
   haEma9.runBacktest,
 );
 
+const strategy1ProHandlers = jobHandlers(
+  'strategy-1-pro',
+  (body) => {
+    const range = parseDateRange(body, { historyStart: strategy1Pro.HISTORY_START });
+    const d = strategy1Pro.DEFAULT_RULE;
+    const t1Pts = numberIn(body.t1Pts, 10, 100, d.t1Pts);
+    return {
+      from: range.from,
+      to: range.to,
+      lots: parseLots(body.lots),
+      brokerage: numberIn(body.brokerage, 0, 1000, strategy1Pro.COSTS.brokeragePerOrder),
+      rule: {
+        maxTradesPerDay: Math.round(numberIn(body.maxTrades, 1, 5, d.maxTradesPerDay)),
+        t1Pts,
+        breakevenAt: Math.min(d.breakevenAt, t1Pts),
+        targetPts: Math.max(t1Pts, numberIn(body.targetPts, 20, 300, d.targetPts)),
+        slMax: Math.max(d.slMin, numberIn(body.slMax, 10, 60, d.slMax)),
+      },
+    };
+  },
+  strategy1Pro.runBacktest,
+);
+
+const niftyChampionHandlers = jobHandlers(
+  'nifty-champion',
+  (body) => {
+    const range = parseDateRange(body, { historyStart: niftyChampion.HISTORY_START });
+    const d = niftyChampion.DEFAULT_RULE;
+    const t1Pts = numberIn(body.t1Pts, 5, 100, d.t1Pts);
+    return {
+      from: range.from,
+      to: range.to,
+      lots: parseLots(body.lots),
+      brokerage: numberIn(body.brokerage, 0, 1000, niftyChampion.COSTS.brokeragePerOrder),
+      rule: {
+        pnlMode: body.pnlMode === 'spot' ? 'spot' : 'option',
+        t1Pts,
+        t2Pts: Math.max(t1Pts, numberIn(body.t2Pts, 5, 200, d.t2Pts)),
+        slPts: numberIn(body.slPts, 2, 50, d.slPts),
+        maxTradesPerDay: Math.round(numberIn(body.maxTrades, 1, 20, d.maxTradesPerDay)),
+        dailyTarget: numberIn(body.dailyTarget, 0, 10000000, d.dailyTarget),
+        dailyMaxLoss: numberIn(body.dailyMaxLoss, 0, 10000000, d.dailyMaxLoss),
+        tax: numberIn(body.tax, 0, 10000, d.tax),
+      },
+    };
+  },
+  niftyChampion.runBacktest,
+);
+
+const oiStrikeFlowHandlers = jobHandlers(
+  'oi-strike-flow',
+  (body) => {
+    const d = oiStrikeFlow.DEFAULT_RULE;
+    const range = parseDateRange(body, { historyStart: '2020-01-01' });
+    if (range.to < oiStrikeFlow.HISTORY_START) throw new Error(`Option history starts ${oiStrikeFlow.HISTORY_START}`);
+    return {
+      from: range.from < oiStrikeFlow.HISTORY_START ? oiStrikeFlow.HISTORY_START : range.from,
+      to: range.to,
+      lots: parseLots(body.lots),
+      rule: {
+        ratio: numberIn(body.ratio, 1, 10, d.ratio),
+        maxTrades: Math.round(numberIn(body.maxTrades, 1, 5, d.maxTrades)),
+        optSl: numberIn(body.optSl, 0, 200, d.optSl),
+        unarmedMin: Math.round(numberIn(body.unarmedMin, 5, 330, d.unarmedMin)),
+        lastSignal: clockIn(body.lastSignal, 9 * 60 + 45, 15 * 60, d.lastSignal),
+        slippage: numberIn(body.slippage, 0, 5, d.slippage),
+      },
+    };
+  },
+  oiStrikeFlow.runBacktest,
+);
+
 module.exports = {
+  postNiftyChampionBacktestRun: niftyChampionHandlers.run,
+  getNiftyChampionBacktestJob: niftyChampionHandlers.status,
+  postStrategy1ProBacktestRun: strategy1ProHandlers.run,
+  getStrategy1ProBacktestJob: strategy1ProHandlers.status,
+  postOiStrikeFlowBacktestRun: oiStrikeFlowHandlers.run,
+  getOiStrikeFlowBacktestJob: oiStrikeFlowHandlers.status,
   postHaEma9BacktestRun: haEma9Handlers.run,
   getHaEma9BacktestJob: haEma9Handlers.status,
   postOpenOiWallsBacktestRun: openOiWallsHandlers.run,

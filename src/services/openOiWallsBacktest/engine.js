@@ -6,15 +6,15 @@
  *     Put wall = largest |Put ΔOI| → buy CE · Call wall = largest |Call ΔOI| → buy PE. Strikes within
  *     ±lookaround strikes of spot (Dhan history has ATM±10). Like live: if a side has no ΔOI yet, wait for
  *     the next minute's OI (up to 09:20), then fall back to the largest absolute OI.
- *   Same-strike filter (backtest only, off by default): put and call wall on one strike → no trade that day. *   Entry (walls known → 10:15): a minute that opens inside ±proximity of a wall fills at that option open;
+ *   +/− rule (backtest only): a day is traded only when one wall has + ΔOI and the other − ΔOI; only the
+ *     + wall can be entered, the − wall never. Both +, both −, or an absolute-OI fallback wall → no trade.
+ *   Entry (walls known → 10:15): a minute that opens inside ±proximity of a wall fills at that option open;
  *     a touch inside a minute fills at the next minute's option open (1-min data has no ticks — the next
  *     real price is used, never a guess from the touched minute's range). One trade per day.
- *   Exit (live trail): peak +20/+30/+40/+50/+70 locks +10/+20/+25/+30/+50, from +40 also peak − 20;
- *     option back to the lock → exit at the lock. Until armed: SL entry − 80 and exit at 11:30. Close 15:15. *     Within a minute stops are checked before the minute's high raises the lock (new lock applies next
- *     minute), and a stop is checked before a rung in the same minute.
+ *   Exit (backtest, not live): the 15:15 close only — no target, no stop loss, no trail. Every level in
+ *     `targets` and the option's high / low are tracked from entry to 15:15.
  */
 const { addDays, ensureDays, loadDays } = require('./dataSource');
-const { TRAIL_RUNGS, PEAK_TRAIL_GAP, computeTrailLockPoints } = require('../../utils/openOiWallsTrail');
 const { rangeChunks, chunkProgress } = require('../backtestChunks');
 
 /** First day Dhan has weekly NIFTY option minute history. */
@@ -28,19 +28,17 @@ const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', '
 const DEFAULT_RULE = {
   lotSize: 65,
   charges: 100,
-  proximity: 25,
+  proximity: 5,
   lookaround: 12,
-  emergencySl: 80,
-  unarmedExit: 11 * 60 + 30,
+  targets: [10, 20, 30, 40, 50],
   entryTo: 10 * 60 + 15,
   eod: 15 * 60 + 15,
   slippage: 0,
-  skipSameStrike: false,
 };
 
 const r2 = (n) => Number(Number(n).toFixed(2));
 const hhmm = (m) => `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
-const stamp = (dateKey, m) => `${dateKey}T${hhmm(m)}:00+05:30`;
+const signedPts = (n) => `${n >= 0 ? '+' : ''}${r2(n)}`;
 
 function minuteMap(series) {
   const out = new Map();
@@ -208,69 +206,57 @@ function findEntry(nifty, day, walls, fromMin, rule, events) {
   return null;
 }
 
-function runExit({ dateKey, book, entryMin, entry, qty, rule, events }) {
-  const slPx = rule.emergencySl > 0 ? r2(entry - rule.emergencySl) : null;
-  const milestones = TRAIL_RUNGS.map((r) => ({
-    points: r.peak,
-    lockPoints: r.lock,
-    role: 'trail_arm',
-    premium: r2(entry + r.peak),
-    status: 'PENDING',
-    hitAt: null,
-    hitPremium: null,
-    pnlAtHit: null,
-  }));
-  let peak = entry;
-  let lock = null;
+/** Day open / high / low / close of one option series (09:15 → 15:29), or null. */
+function dayOhlc(series) {
+  if (!series?.m?.length) return null;
+  let o = null;
+  let h = -Infinity;
+  let l = Infinity;
+  let c = null;
+  series.m.forEach((m, i) => {
+    if (m < CAPTURE || m > 15 * 60 + 29) return;
+    if (o == null) o = series.o[i];
+    h = Math.max(h, series.h[i]);
+    l = Math.min(l, series.l[i]);
+    c = series.c[i];
+  });
+  return o == null ? null : { o: r2(o), h: r2(h), l: r2(l), c: r2(c) };
+}
+
+/**
+ * Exit at the 15:15 close only — no target, no stop. `high` / `low` and every level in `levels` (first time reached) cover entry → 15:15.
+ */
+function runExit({ book, entryMin, entry, rule }) {
+  const levels = rule.targets.map((pts) => ({ pts, premium: r2(entry + pts), hit: false, time: null }));
+  let exit = null;
+  let high = { px: entry, min: entryMin };
+  let low = { px: entry, min: entryMin };
   let last = entry;
   let lastMin = entryMin;
   let missing = 0;
-  const done = (type, m, premium) => ({ type, min: m, premium, peak, lock, milestones, missing });
   for (let m = entryMin; m <= rule.eod; m += 1) {
     const o = book.get(m);
     if (!o) {
       missing += 1;
       continue;
     }
-    // The fill minute starts at the entry price, so only its range after the open can stop the trade.
+    // The fill minute starts at the entry price, so only its range after the open counts.
     const open = m === entryMin ? entry : o.o;
-    if (m === rule.eod) return done('DAY_CLOSE', m, open);
-    if (lock != null) {
-      const lockPx = r2(entry + lock);
-      if (open <= lockPx) return done('TRAIL', m, open);
-      if (o.l <= lockPx) return done('TRAIL', m, lockPx);
-    } else {
-      if (m >= rule.unarmedExit) return done('TIME_EXIT', m, open);
-      if (slPx != null && open <= slPx) return done('SL', m, open);
-      if (slPx != null && o.l <= slPx) return done('SL', m, slPx);
+    if (m === rule.eod) {
+      if (open > high.px) high = { px: open, min: m };
+      if (open < low.px) low = { px: open, min: m };
+      if (!exit) exit = { type: 'DAY_CLOSE', min: m, premium: open };
+      break;
     }
-    peak = Math.max(peak, o.h);
-    const hitNow = [];
-    for (const ms of milestones) {
-      if (ms.status === 'PENDING' && peak - entry >= ms.points) {
-        ms.status = 'HIT';
-        ms.hitAt = stamp(dateKey, m);
-        ms.hitPremium = ms.premium;
-        ms.pnlAtHit = r2(ms.points * qty - rule.charges);
-        hitNow.push(`+${ms.points}`);
-      }
-    }
-    const raw = computeTrailLockPoints(peak - entry);
-    const next = raw != null ? r2(raw) : null;
-    if (next != null && (lock == null || next > lock)) {
-      lock = next;
-      const lockText = `lock +${lock} (₹${r2(entry + lock)})${peak - entry >= 40 ? ` · peak − ${PEAK_TRAIL_GAP} active` : ''}`;
-      events.push({
-        time: hhmm(m),
-        text: hitNow.length
-          ? `Peak ₹${r2(peak)} (+${r2(peak - entry)}) — rung ${hitNow.join(', ')} hit → ${lockText}`
-          : `Peak ₹${r2(peak)} → ${lockText}`,
-      });
+    if (o.h > high.px) high = { px: o.h, min: m };
+    if (o.l < low.px) low = { px: o.l, min: m };
+    for (const lv of levels) {
+      if (!lv.hit && o.h >= lv.premium) Object.assign(lv, { hit: true, time: hhmm(m) });
     }
     last = o.c;
     lastMin = m;
   }
-  return done('DAY_CLOSE', lastMin, last);
+  return { ...(exit || { type: 'DAY_CLOSE', min: lastMin, premium: last }), levels, high, low, missing };
 }
 
 function runDay({ day, prev, rule, qty }) {
@@ -283,31 +269,42 @@ function runDay({ day, prev, rule, qty }) {
   const dayInfo = { walls: cap.walls, baseline: cap.baseline, spotAtCapture: cap.spotAtCapture };
   const putWall = cap.walls.find((w) => w.side === 'PUT');
   const callWall = cap.walls.find((w) => w.side === 'CALL');
-  if (rule.skipSameStrike && putWall && callWall && putWall.strike === callWall.strike) {
-    return { skipped: `put and call wall on the same strike ${putWall.strike} — no trade`, ...dayInfo };
+  const fmt = (w) => `${w.side} ${w.strike} ${w.label.startsWith('doi_') ? `ΔOI ${w.oi > 0 ? '+' : ''}${w.oi.toLocaleString('en-IN')}` : '(no ΔOI)'}`;
+  const sign = (w) => (w?.label.startsWith('doi_') ? Math.sign(w.oi) : 0);
+  if (!putWall || !callWall) return { skipped: 'only one wall found — need one + and one − wall', ...dayInfo };
+  if (sign(putWall) === 0 || sign(callWall) === 0) {
+    return { skipped: `wall without ΔOI (${fmt(putWall)} / ${fmt(callWall)}) — need one + and one − wall`, ...dayInfo };
   }
+  if (sign(putWall) === sign(callWall)) {
+    const both = sign(putWall) > 0 ? 'both walls +' : 'both walls −';
+    return { skipped: `${both} (${fmt(putWall)} / ${fmt(callWall)}) — need one + and one − wall`, ...dayInfo };
+  }
+  const plus = sign(putWall) > 0 ? putWall : callWall;
+  const minus = plus === putWall ? callWall : putWall;
+  events.push({ time: hhmm(cap.captureMin), text: `+/− rule: trade only ${fmt(plus)} → ${plus.optionType}; never ${fmt(minus)}` });
 
-  const hit = findEntry(nifty, day, cap.walls, cap.captureMin + 1, rule, events);
-  if (!hit) return { skipped: `spot never within ±${rule.proximity} of a wall by ${hhmm(rule.entryTo)}`, ...dayInfo };
+  const hit = findEntry(nifty, day, [plus], cap.captureMin + 1, rule, events);
+  if (!hit) {
+    return { skipped: `spot never within ±${rule.proximity} of the + wall ${plus.side} ${plus.strike} by ${hhmm(rule.entryTo)}`, ...dayInfo };
+  }
 
   const { wall } = hit;
   const book = minuteMap(day[wall.optionType][String(wall.strike)]);
   const entryPremium = r2(hit.premium + rule.slippage);
-  const exit = runExit({ dateKey: day.dateKey, book, entryMin: hit.min, entry: entryPremium, qty, rule, events });
-  for (const ms of exit.milestones) if (ms.status === 'PENDING') ms.status = 'MISSED';
+  const exit = runExit({ book, entryMin: hit.min, entry: entryPremium, rule });
   const exitPremium = r2(Math.max(0.05, exit.premium - rule.slippage));
   const points = r2(exitPremium - entryPremium);
   const grossPnL = r2(points * qty);
   const netPnL = r2(grossPnL - rule.charges);
   const exitSpot = nifty.get(exit.min)?.o ?? nifty.get(exit.min - 1)?.c ?? hit.spot;
-  const reason = {
-    TRAIL: `TRAIL lock +${exit.lock} @ ${hhmm(exit.min)}`,
-    SL: `SL −${rule.emergencySl} @ ${hhmm(exit.min)}`,
-    TIME_EXIT: `Not armed by ${hhmm(rule.unarmedExit)}`,
-    DAY_CLOSE: `${hhmm(rule.eod)} CLOSE`,
-  }[exit.type];
+  const reason = `${hhmm(rule.eod)} CLOSE`;
   events.push({ time: hhmm(exit.min), text: `Exit ₹${exitPremium} — ${reason} · ${points >= 0 ? '+' : ''}${points} pts` });
+  events.push({
+    time: hhmm(rule.eod),
+    text: `Entry → ${hhmm(rule.eod)}: high ₹${r2(exit.high.px)} (${signedPts(exit.high.px - entryPremium)}) at ${hhmm(exit.high.min)} · low ₹${r2(exit.low.px)} (${signedPts(exit.low.px - entryPremium)}) at ${hhmm(exit.low.min)}`,
+  });
   const month = Number(day.dateKey.slice(5, 7));
+  const wallsWithOhlc = cap.walls.map((w) => ({ ...w, ohlc: dayOhlc(day[w.optionType]?.[String(w.strike)]) }));
   return {
     ...dayInfo,
     trade: {
@@ -320,7 +317,7 @@ function runDay({ day, prev, rule, qty }) {
       wallSide: wall.side,
       wallOi: wall.oi,
       wallLabel: wall.label,
-      walls: cap.walls,
+      walls: wallsWithOhlc,
       chain: cap.chain,
       baseline: cap.baseline,
       captureTime: hhmm(cap.captureMin),
@@ -330,10 +327,13 @@ function runDay({ day, prev, rule, qty }) {
       entrySpot: r2(hit.spot),
       avgAtEntry: hit.avg != null ? r2(hit.avg) : null,
       entryPremium,
-      peakPremium: r2(exit.peak),
-      maxGainPts: r2(exit.peak - entryPremium),
-      lockPts: exit.lock,
-      milestones: exit.milestones,
+      targetLevels: exit.levels,
+      highAfterEntry: r2(exit.high.px),
+      highAfterTime: hhmm(exit.high.min),
+      maxGainPts: r2(exit.high.px - entryPremium),
+      lowAfterEntry: r2(exit.low.px),
+      lowAfterTime: hhmm(exit.low.min),
+      maxDropPts: r2(exit.low.px - entryPremium),
       missingBars: exit.missing,
       exitTime: hhmm(exit.min),
       exitSpot: r2(exitSpot),
@@ -392,7 +392,7 @@ async function runBacktest({ from, to, lots = 10, rule: ruleIn = {}, onProgress,
     to,
     lots,
     qty,
-    rule: { ...rule, unarmedExit: hhmm(rule.unarmedExit), entryTo: hhmm(rule.entryTo), eod: hhmm(rule.eod) },
+    rule: { ...rule, entryTo: hhmm(rule.entryTo), eod: hhmm(rule.eod) },
     tradingDays,
     skippedDays: [...skippedDays],
     summary: summarize(trades),

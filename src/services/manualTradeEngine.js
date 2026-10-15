@@ -23,7 +23,6 @@ const {
   fetchOptionChainCached,
   getOptionChainOiSnapshot,
   listFutureUnderlyings,
-  listFutureExpiries,
   getFutureLtp,
   getFutureQuote,
   isTradableStockUnderlying,
@@ -35,7 +34,7 @@ const {
   getLastPrice,
 } = require('./dhanLiveService');
 
-/** Dual desks: index (Manual Console) + stock FUT (no day-close). Separate strategyKey + walletKey. */
+/** Dual desks: index options (day-close) + stock options (carry forward, exit at expiry). Separate strategyKey + walletKey. */
 const DESK_INDEX = {
   strategyKey: MANUAL_CONSOLE_LIVE_KEY,
   walletKey: 'paper_live_manual',
@@ -236,6 +235,14 @@ function isEodExitTime(minutes) {
   return minutes >= EOD_EXIT;
 }
 
+/** Carry-forward desks exit on expiry day at EOD_EXIT (or immediately if expiry already passed). */
+function isExpiryExitDue(trade, clock) {
+  const exp = String(trade?.expiryDate || '').slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(exp)) return false;
+  if (clock.dateKey > exp) return true;
+  return clock.dateKey === exp && isEodExitTime(clock.minutes);
+}
+
 function normalizeSymbol(symbol) {
   const s = String(symbol || 'NIFTY').toUpperCase();
   if (getDayCloseEnabled()) {
@@ -245,9 +252,9 @@ function normalizeSymbol(symbol) {
     }
     return s;
   }
-  // Stock desk — futures only
+  // Stock desk — F&O stock underlyings only
   if (ALLOWED_SYMBOLS.has(s) || !isTradableStockUnderlying(s)) {
-    throw new Error(`Symbol must be a tradable stock future (not index): ${s}`);
+    throw new Error(`Symbol must be a tradable F&O stock (not index): ${s}`);
   }
   return s;
 }
@@ -397,6 +404,37 @@ function pickManualStrike({ entrySpot, symbol, optionType, strikeMode }) {
     return type === 'CE' ? atm + step : atm - step;
   }
   return atm;
+}
+
+function sortedChainStrikes(chain) {
+  return Object.keys(chain?.oc || {})
+    .map(Number)
+    .filter((n) => Number.isFinite(n) && n > 0)
+    .sort((a, b) => a - b);
+}
+
+/** Index of the bottom-ATM strike (highest listed strike at or below spot). */
+function chainAtmIndex(strikeKeys, spot) {
+  if (!strikeKeys.length) return -1;
+  let idx = 0;
+  for (let i = 0; i < strikeKeys.length; i += 1) {
+    if (strikeKeys[i] <= spot) idx = i;
+    else break;
+  }
+  return idx;
+}
+
+/** Stock strikes have uneven spacing, so ITM/OTM step by listed strikes, not a fixed step. */
+function pickChainStrike({ strikeKeys, spot, optionType, strikeMode }) {
+  const atmIdx = chainAtmIndex(strikeKeys, spot);
+  if (atmIdx < 0) return null;
+  const type = normalizeOptionType(optionType);
+  const mode = String(strikeMode || 'ATM').toUpperCase();
+  let idx = atmIdx;
+  if (mode === 'ITM') idx = type === 'CE' ? atmIdx - 1 : atmIdx + 1;
+  if (mode === 'OTM') idx = type === 'CE' ? atmIdx + 1 : atmIdx - 1;
+  idx = Math.max(0, Math.min(strikeKeys.length - 1, idx));
+  return strikeKeys[idx];
 }
 
 /**
@@ -902,8 +940,16 @@ async function evaluateExitsFromMark(trade, mark, clock) {
     return true;
   }
 
-  if (isEodExitTime(clock.minutes)) {
-    await finalizeTrade(trade, { exitPremium: optionLtp, mark, reason: 'DAY_CLOSE' });
+  if (getDayCloseEnabled()) {
+    if (isEodExitTime(clock.minutes)) {
+      await finalizeTrade(trade, { exitPremium: optionLtp, mark, reason: 'DAY_CLOSE' });
+      return true;
+    }
+    return false;
+  }
+
+  if (isExpiryExitDue(trade, clock)) {
+    await finalizeTrade(trade, { exitPremium: optionLtp, mark, reason: 'EXPIRY' });
     return true;
   }
   return false;
@@ -1301,140 +1347,14 @@ async function releaseHeldFunds(order) {
   order.heldAmount = 0;
 }
 
-async function createFutureOrder(payload, clock) {
-  const symbol = await normalizeFutureSymbol(payload.symbol);
-  const side = normalizeSide(payload.side);
-  const orderType = String(payload.orderType || 'MARKET').toUpperCase() === 'LIMIT' ? 'LIMIT' : 'MARKET';
-  const lots = Math.max(1, Math.floor(Number(payload.lots) || 1));
-  const lotSize = Math.max(1, Number(payload.lotSize) || (await getCurrentLotSize(symbol)));
-  const perTradeCost = Number.isFinite(Number(payload.perTradeCost)) && Number(payload.perTradeCost) >= 0
-    ? Number(payload.perTradeCost)
-    : 100;
-
-  // SL & Target share one unit mode (% or exact premium pts).
-  const riskMode = normalizeRiskMode(payload.stopLossMode || payload.targetMode);
-  const stopLossMode = riskMode;
-  const targetMode = riskMode;
-  const slRawValue = payload.stopLossValue != null ? payload.stopLossValue : payload.stopLossPoints;
-  const tgRawValue = payload.targetValue != null ? payload.targetValue : payload.targetProfitPoints;
-  const slParsed = parseRiskInputs({ mode: stopLossMode, rawValue: slRawValue, leg: 'SL' });
-  const tgParsed = parseRiskInputs({ mode: targetMode, rawValue: tgRawValue, leg: 'TG' });
-  const slConfigured = slParsed.configured;
-  const tgConfigured = tgParsed.configured;
-
-  // Resolve nearest (or chosen) future expiry.
-  const expiries = await listFutureExpiries(symbol);
-  if (!expiries.length) throw new Error(`No futures contracts found for ${symbol}`);
-  const wanted = payload.expiryDate ? String(payload.expiryDate).slice(0, 10) : null;
-  const expiryDate = (wanted && expiries.find((e) => e.expiry === wanted)?.expiry) || expiries[0].expiry;
-
-  let limitPremium = null;
-  if (orderType === 'LIMIT') {
-    limitPremium = parsePremiumPoints(payload.limitPremium);
-    if (limitPremium == null) throw new Error('Limit price is required for LIMIT orders');
-  }
-
-  // Pre-check cash (main only — testing free).
-  {
-    const isTesting = parseIsTesting(payload.isTesting);
-    if (!isTesting) {
-      let px = limitPremium;
-      if (orderType === 'MARKET') {
-        const { ltp } = await getFutureLtp({ symbol, expiry: expiryDate });
-        px = ltp;
-      }
-      const need = estimateCapitalRequired({
-        product: 'FUTURE',
-        premium: px,
-        qty: lotSize * lots,
-        charges: perTradeCost,
-      });
-      await assertSufficientBalance(need);
-    }
-  }
-
-  const order = await ManualPendingOrder.create({
-    strategyKey: getStrategyKey(),
-    symbol,
-    optionType: 'FUT',
-    product: 'FUTURE',
-    side,
-    strike: 0,
-    expiryDate,
-    orderType,
-    limitPremium,
-    lots,
-    lotSize,
-    perTradeCost,
-    stopLossPoints: slParsed.points,
-    targetProfitPoints: tgParsed.points,
-    stopLossMode: slConfigured ? slParsed.mode : null,
-    targetMode: tgConfigured ? tgParsed.mode : null,
-    stopLossPct: slParsed.pct,
-    targetPct: tgParsed.pct,
-    stopLossAmount: slParsed.amount,
-    targetAmount: tgParsed.amount,
-    status: 'PENDING',
-    sessionDateKey: clock.dateKey,
-    isTesting: parseIsTesting(payload.isTesting),
-  });
-
-  await logAction({
-    action: 'ORDER_CREATED',
-    orderId: order._id,
-    symbol,
-    message: `FUTURE ${side} ${symbol} x${lots} (${orderType})`,
-    details: {
-      product: 'FUTURE',
-      side,
-      orderType,
-      limitPremium,
-      expiryDate,
-      stopLoss: slConfigured ? { mode: slParsed.mode, ...slParsed } : 'off',
-      target: tgConfigured ? { mode: tgParsed.mode, ...tgParsed } : 'eod',
-    },
-  });
-
-  if (orderType === 'LIMIT') {
-    try {
-      await holdFundsForLimitOrder(order, limitPremium);
-    } catch (err) {
-      order.status = 'CANCELLED';
-      order.cancelReason = err.message;
-      await order.save();
-      throw err;
-    }
-  }
-
-  if (orderType === 'MARKET') {
-    try {
-      const trade = await createMarketFill(order, clock);
-      return { order, trade, filled: true };
-    } catch (err) {
-      order.status = 'CANCELLED';
-      order.cancelReason = err.message;
-      await order.save();
-      await logAction({ action: 'ORDER_FAILED', orderId: order._id, symbol, message: err.message });
-      throw err;
-    }
-  }
-  return { order, trade: null, filled: false };
-}
-
 async function createOrder(payload) {
   const clock = getIstClock(new Date());
   await assertMarketOpen(clock);
 
   // Desk is selected by the controller (index vs stock). Do not auto-switch here.
+  // Both desks trade options; legacy FUT positions are still managed until closed.
   if (normalizeProduct(payload.product) === 'FUTURE') {
-    if (resolveDeskName() !== 'stock') {
-      throw new Error('Stock futures belong on Stock Manual — use /api/manual-stock');
-    }
-    return createFutureOrder(payload, clock);
-  }
-
-  if (resolveDeskName() !== 'index') {
-    throw new Error('Stock Manual only accepts stock futures (product=FUTURE)');
+    throw new Error('Futures orders are disabled — pick a CE/PE strike from the option chain');
   }
 
   const symbol = normalizeSymbol(payload.symbol);
@@ -1467,12 +1387,14 @@ async function createOrder(payload) {
 
   let strike = Number(payload.strike);
   if (!Number.isFinite(strike) || strike <= 0) {
-    strike = pickManualStrike({
-      entrySpot: spot,
-      symbol,
-      optionType,
-      strikeMode: String(payload.strikeMode || 'ATM').toUpperCase(),
-    });
+    const strikeMode = String(payload.strikeMode || 'ATM').toUpperCase();
+    if (getDayCloseEnabled()) {
+      strike = pickManualStrike({ entrySpot: spot, symbol, optionType, strikeMode });
+    } else {
+      const chain = await fetchOptionChainCached({ symbol, expiry: expiryDate });
+      strike = pickChainStrike({ strikeKeys: sortedChainStrikes(chain), spot, optionType, strikeMode });
+    }
+    if (!Number.isFinite(strike) || strike <= 0) throw new Error('Could not resolve strike from option chain');
   }
 
   let limitPremium = null;
@@ -1926,6 +1848,25 @@ async function checkOpenPositions(clock) {
         continue;
       }
 
+      const tradeExpiry = String(trade.expiryDate || '').slice(0, 10);
+      if (!getDayCloseEnabled() && tradeExpiry && clock.dateKey > tradeExpiry) {
+        let mark = null;
+        try {
+          mark = await resolveMarkForTrade(trade);
+        } catch {
+          mark = null;
+        }
+        const lastLtp = Number(mark?.optionLtp) > 0
+          ? Number(mark.optionLtp)
+          : Number(trade.openPositionMark?.optionLtp) || Number(trade.entryPremium);
+        await finalizeTrade(trade, {
+          exitPremium: lastLtp,
+          mark: { ...(mark || {}), optionLtp: lastLtp },
+          reason: 'EXPIRY',
+        });
+        continue;
+      }
+
       const mark = await resolveMarkForTrade(trade);
       const positionMark = buildOpenPositionMark(trade, mark, clock);
       cacheTradeLite(trade);
@@ -2032,38 +1973,31 @@ async function getQuote({ symbol, expiry, strike, optionType }) {
 }
 
 async function getExpiries(symbol) {
-  // Stock desk: future contract months (not option weeklies).
-  if (resolveDeskName() === 'stock') {
-    const sym = await normalizeFutureSymbol(symbol);
-    const list = await listFutureExpiries(sym);
-    const dates = list.map((e) => e.expiry);
-    return { symbol: sym, expiries: dates, nearest: dates[0] || null };
-  }
   const sym = normalizeSymbol(symbol);
-  const list = await fetchExpiryList(sym);
-  const today = new Date().toISOString().slice(0, 10);
+  const list = (await fetchExpiryList(sym)).map((d) => String(d).slice(0, 10));
+  const today = getIstClock(new Date()).dateKey;
   const future = [...list].sort().filter((d) => d >= today);
   const nearest = future[0] || list[0] || null;
   return { symbol: sym, expiries: future.length ? future : list, nearest };
 }
 
-/** Symbol picker data: index (desk=index) or stock futures only (desk=stock). */
+/** Symbol picker data: index underlyings (desk=index) or F&O stock underlyings (desk=stock). */
 async function getInstrumentUniverse() {
   const desk = resolveDeskName();
   if (desk === 'stock') {
-    let futures = [];
+    let underlyings = [];
     try {
-      futures = await listFutureUnderlyings();
+      underlyings = await listFutureUnderlyings();
     } catch {
-      futures = [];
+      underlyings = [];
     }
-    let stockFutures = futures.filter((s) => !ALLOWED_SYMBOLS.has(s) && isTradableStockUnderlying(s));
-    stockFutures.sort((a, b) => a.localeCompare(b));
-    return { indexOptions: [], stockFutures };
+    const stockOptions = underlyings.filter((s) => !ALLOWED_SYMBOLS.has(s) && isTradableStockUnderlying(s));
+    stockOptions.sort((a, b) => a.localeCompare(b));
+    return { indexOptions: [], stockOptions };
   }
-  // Index Manual: index underlyings only (stock FUT lives on Stock Manual).
+  // Index Manual: index underlyings only (stocks live on Stock Manual).
   const indexOptions = ['NIFTY', 'BANKNIFTY', 'SENSEX', 'FINNIFTY'].filter((s) => ALLOWED_SYMBOLS.has(s));
-  return { indexOptions, stockFutures: [] };
+  return { indexOptions, stockOptions: [] };
 }
 
 /** Live quote for a stock/index future order ticket. */
@@ -2125,13 +2059,24 @@ async function getChainAroundAtm({ symbol, expiry }) {
     throw new Error('Underlying price unavailable for option chain');
   }
 
-  const step = getStrikeStep(sym);
-  const atm = atmStrikeFromSpot(spot, sym);
   const lotSize = Math.max(1, Number(await getCurrentLotSize(sym)) || 1);
   const strikes = chain.oc || {};
+  let atm;
+  let strikeList;
+  if (getDayCloseEnabled()) {
+    const step = getStrikeStep(sym);
+    atm = atmStrikeFromSpot(spot, sym);
+    strikeList = [];
+    for (let i = -5; i <= 5; i += 1) strikeList.push(atm + i * step);
+  } else {
+    const keys = sortedChainStrikes(chain);
+    const atmIdx = chainAtmIndex(keys, spot);
+    if (atmIdx < 0) throw new Error(`Option chain has no strikes for ${sym}`);
+    atm = keys[atmIdx];
+    strikeList = keys.slice(Math.max(0, atmIdx - 5), atmIdx + 6);
+  }
   const rows = [];
-  for (let i = -5; i <= 5; i += 1) {
-    const k = atm + i * step;
+  for (const k of strikeList) {
     const row = findStrikeRow(strikes, k);
     if (!row) continue;
     rows.push({

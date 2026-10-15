@@ -41,14 +41,33 @@ function publicJob(job, have = 0) {
 }
 
 /**
- * Starts `run(onProgress, onPartial)` in the background. `onPartial(result)` publishes results so far
- * (same shape as the final result). Returns `{ busy: true, job }` when another run is active.
+ * Stops a running job. The engine notices on its next progress / partial callback (which then throws),
+ * so a Dhan call already in flight may still finish, but the slot is free for a new run right away.
  */
-function startJob(kind, params, run) {
+function cancelJob(jobId) {
+  const job = jobs.get(jobId);
+  if (!job) return null;
+  if (job.status === 'running') {
+    job.cancelled = true;
+    job.status = 'cancelled';
+    job.partial = null;
+    job.finishedAt = Date.now();
+    if (activeJobId === job.id) activeJobId = null;
+  }
+  return publicJob(job);
+}
+
+/**
+ * Starts `run(onProgress, onPartial)` in the background. `onPartial(result)` publishes results so far
+ * (same shape as the final result). Returns `{ busy: true, job }` when another run is active, unless
+ * `replace` is set and the active run is the same `kind` — then that run is cancelled first.
+ */
+function startJob(kind, params, run, { replace = false } = {}) {
   pruneJobs();
   if (activeJobId) {
     const active = jobs.get(activeJobId);
-    return { busy: true, job: active ? publicJob(active) : null };
+    if (!(replace && active?.kind === kind)) return { busy: true, job: active ? publicJob(active) : null };
+    cancelJob(active.id);
   }
   const job = {
     id: crypto.randomUUID(),
@@ -65,20 +84,27 @@ function startJob(kind, params, run) {
   jobs.set(job.id, job);
   activeJobId = job.id;
 
+  const guard = (fn) => (value) => {
+    if (job.cancelled) throw new Error('Backtest cancelled');
+    fn(value);
+  };
+
   Promise.resolve()
-    .then(() => run((p) => { job.progress = p; }, (partial) => { job.partial = partial; }))
+    .then(() => run(guard((p) => { job.progress = p; }), guard((partial) => { job.partial = partial; })))
     .then((result) => {
+      if (job.cancelled) return;
       job.result = result;
       job.partial = null;
       job.status = 'done';
     })
     .catch((err) => {
+      if (job.cancelled) return;
       job.error = err.message;
       job.status = 'error';
     })
     .finally(() => {
-      job.finishedAt = Date.now();
-      activeJobId = null;
+      if (!job.finishedAt) job.finishedAt = Date.now();
+      if (activeJobId === job.id) activeJobId = null;
     });
 
   return { busy: false, job: publicJob(job) };
@@ -89,4 +115,4 @@ function getJob(jobId, have = 0) {
   return job ? publicJob(job, have) : null;
 }
 
-module.exports = { startJob, getJob };
+module.exports = { startJob, getJob, cancelJob };

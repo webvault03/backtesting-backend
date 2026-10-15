@@ -214,7 +214,8 @@ function simulate({ day, optionType, strike, entryMin, entryPremium, entrySpot, 
       }
     }
     if (lock != null && o.l <= lock) {
-      return { exitType: 'TRAIL', exitMin: m, exitSec: 0, exitPremium: lock, exitSpot: n.c, peak, lock };
+      const gapped = startPrem <= lock;
+      return { exitType: 'TRAIL', exitMin: m, exitSec: 0, exitPremium: gapped ? startPrem : lock, exitSpot: gapped ? startSpot : n.c, peak, lock };
     }
     peak = Math.max(peak, o.h);
     const lockPts = computeTrailLockPoints(peak - entryPremium);

@@ -52,6 +52,14 @@ async function bootBackgroundServices() {
   }
 
   try {
+    const oiStrikeLive = require('./services/oiStrikeLiveService');
+    oiStrikeLive.ensureEngineRunning();
+    console.log('OI Strike live recorder started (current day only)');
+  } catch (err) {
+    console.warn('OI Strike live recorder boot:', err.message);
+  }
+
+  try {
     // Rolling 7 trading-day NIFTY 5m candles in Mongo for the Liquidity Map chart.
     const liqChart = require('./services/liquidityChartHistoryService');
     liqChart.startHistoryLoop();

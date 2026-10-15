@@ -21,7 +21,7 @@ const REQUEST_GAP_MS = 1100;
 const MAX_IN_FLIGHT = 4;
 
 /** Most days kept in memory (≈60 KB each gzipped); oldest-used days are dropped first. */
-const MEMORY_MAX_DAYS = 800;
+const MEMORY_MAX_DAYS = 2300;
 const memory = new Map();
 
 function remember(dateKey, entry) {

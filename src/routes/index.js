@@ -36,8 +36,16 @@ const {
   getOpenOiWallsBacktestJob,
   postHaEma9BacktestRun,
   getHaEma9BacktestJob,
+  postOiStrikeFlowBacktestRun,
+  getOiStrikeFlowBacktestJob,
+  postStrategy1ProBacktestRun,
+  getStrategy1ProBacktestJob,
+  postNiftyChampionBacktestRun,
+  getNiftyChampionBacktestJob,
 } = require('../controllers/strategyRunBacktestController');
 const { postOiStrikeReportRun, getOiStrikeReportJob } = require('../controllers/oiStrikeReportController');
+const { getOiStrikeLive, postOiStrikeLiveBackfill } = require('../controllers/oiStrikeLiveController');
+const { cancelBacktestJob } = require('../controllers/backtestRequest');
 const {
   getStatus: getLiveStatus,
   startLive,
@@ -130,6 +138,7 @@ router.get('/manual-stock/expiries', stockEngine.getManualStockExpiries);
 router.get('/manual-stock/quote', stockEngine.getManualStockQuote);
 router.get('/manual-stock/instruments', stockEngine.getManualStockInstruments);
 router.get('/manual-stock/future-quote', stockEngine.getManualStockFutureQuote);
+router.get('/manual-stock/chain', stockEngine.getManualStockChain);
 router.post('/manual-stock/orders', stockEngine.postManualStockOrder);
 router.delete('/manual-stock/orders/:orderId', stockEngine.deleteManualStockOrder);
 router.post('/manual-stock/positions/:tradeId/close', stockEngine.postManualStockClosePosition);
@@ -164,6 +173,8 @@ router.get('/oi-flow/header-signal', getOiFlowHeaderSignal);
 router.get('/oi-flow/header-signal/history', getOiFlowHeaderSignalHistory);
 router.get('/oi-flow/signals', getOiFlowSignals);
 router.post('/oi-flow/signals/backfill', postOiFlowSignalsBackfill);
+router.get('/report/oi-strikes/live', getOiStrikeLive);
+router.post('/report/oi-strikes/live/backfill', postOiStrikeLiveBackfill);
 
 router.post('/backtest/oi-candle-agree/run', postOiCandleAgreeBacktestRun);
 router.get('/backtest/oi-candle-agree/jobs/:jobId', getOiCandleAgreeBacktestJob);
@@ -179,6 +190,13 @@ router.post('/backtest/open-oi-walls/run', postOpenOiWallsBacktestRun);
 router.get('/backtest/open-oi-walls/jobs/:jobId', getOpenOiWallsBacktestJob);
 router.post('/backtest/ha-ema9/run', postHaEma9BacktestRun);
 router.get('/backtest/ha-ema9/jobs/:jobId', getHaEma9BacktestJob);
+router.post('/backtest/oi-strike-flow/run', postOiStrikeFlowBacktestRun);
+router.get('/backtest/oi-strike-flow/jobs/:jobId', getOiStrikeFlowBacktestJob);
+router.post('/backtest/strategy-1-pro/run', postStrategy1ProBacktestRun);
+router.get('/backtest/strategy-1-pro/jobs/:jobId', getStrategy1ProBacktestJob);
+router.post('/backtest/nifty-champion/run', postNiftyChampionBacktestRun);
+router.get('/backtest/nifty-champion/jobs/:jobId', getNiftyChampionBacktestJob);
+router.post('/backtest/jobs/:jobId/cancel', cancelBacktestJob);
 router.post('/report/oi-strikes/run', postOiStrikeReportRun);
 router.get('/report/oi-strikes/jobs/:jobId', getOiStrikeReportJob);
 router.get('/liquidity-oi-chase/chart', getLiquidityOiChaseChart);

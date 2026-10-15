@@ -1,4 +1,4 @@
-const { startJob, getJob } = require('../services/backtestJobRunner');
+const { startJob, getJob, cancelJob } = require('../services/backtestJobRunner');
 const { getIstClock } = require('../utils/dateTime');
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -33,7 +33,9 @@ function jobHandlers(kind, parseRequest, runBacktest) {
     } catch (err) {
       return res.status(400).json({ ok: false, error: err.message });
     }
-    const { busy, job } = startJob(kind, params, (onProgress, onPartial) => runBacktest({ ...params, onProgress, onPartial }));
+    const { busy, job } = startJob(kind, params, (onProgress, onPartial) => runBacktest({ ...params, onProgress, onPartial }), {
+      replace: req.body?.replace === true,
+    });
     if (busy) return res.status(409).json({ ok: false, error: 'A backtest is already running', job });
     return res.status(202).json({ ok: true, job });
   };
@@ -45,4 +47,11 @@ function jobHandlers(kind, parseRequest, runBacktest) {
   return { run, status };
 }
 
-module.exports = { parseDateRange, numberIn, parseLots, jobHandlers };
+/** POST /backtest/jobs/:jobId/cancel — works for any strategy's job. */
+function cancelBacktestJob(req, res) {
+  const job = cancelJob(req.params.jobId);
+  if (!job) return res.status(404).json({ ok: false, error: 'Job not found or expired' });
+  return res.json({ ok: true, job });
+}
+
+module.exports = { parseDateRange, numberIn, parseLots, jobHandlers, cancelBacktestJob };
