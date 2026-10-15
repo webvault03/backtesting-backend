@@ -5,6 +5,7 @@ const cvdOi = require('../services/cvdOiBacktest/engine');
 const openOiWalls = require('../services/openOiWallsBacktest/engine');
 const haEma9 = require('../services/haEma9Backtest/engine');
 const oiStrikeFlow = require('../services/oiStrikeFlowBacktest/engine');
+const priceActionScalp = require('../services/priceActionScalpBacktest/engine');
 const { parseDateRange, numberIn, parseLots, jobHandlers } = require('./backtestRequest');
 
 const oiTrailHandlers = jobHandlers(
@@ -167,7 +168,33 @@ const oiStrikeFlowHandlers = jobHandlers(
   oiStrikeFlow.runBacktest,
 );
 
+const priceActionScalpHandlers = jobHandlers(
+  'price-action-scalp',
+  (body) => {
+    const d = priceActionScalp.DEFAULT_RULE;
+    const range = parseDateRange(body, { historyStart: '2020-01-01' });
+    if (range.to < priceActionScalp.HISTORY_START) throw new Error(`History starts ${priceActionScalp.HISTORY_START}`);
+    return {
+      from: range.from < priceActionScalp.HISTORY_START ? priceActionScalp.HISTORY_START : range.from,
+      to: range.to,
+      lots: parseLots(body.lots),
+      rule: {
+        slPts: numberIn(body.slPts, 1, 100, d.slPts),
+        t1Pts: numberIn(body.t1Pts, 1, 200, d.t1Pts),
+        t2Pts: numberIn(body.t2Pts, 1, 400, d.t2Pts),
+        maxTrades: Math.round(numberIn(body.maxTrades, 1, 20, d.maxTrades)),
+        profitLock: numberIn(body.profitLock, 0, 1e7, d.profitLock),
+        maxLoss: numberIn(body.maxLoss, 0, 1e7, d.maxLoss),
+        taxPerTrade: numberIn(body.taxPerTrade, 0, 10000, d.taxPerTrade),
+      },
+    };
+  },
+  priceActionScalp.runBacktest,
+);
+
 module.exports = {
+  postPriceActionScalpBacktestRun: priceActionScalpHandlers.run,
+  getPriceActionScalpBacktestJob: priceActionScalpHandlers.status,
   postOiStrikeFlowBacktestRun: oiStrikeFlowHandlers.run,
   getOiStrikeFlowBacktestJob: oiStrikeFlowHandlers.status,
   postHaEma9BacktestRun: haEma9Handlers.run,
