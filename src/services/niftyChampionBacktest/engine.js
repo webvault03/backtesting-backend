@@ -311,6 +311,57 @@ function finishTrade(t, x, dateKey, rule, brokerage) {
   };
 }
 
+function summarize(trades) {
+  let equity = 0;
+  let peak = 0;
+  let maxDd = 0;
+  const months = {};
+  const years = {};
+  const dayPnl = {};
+  const exits = Object.fromEntries(Object.keys(EXIT_REASON).map((k) => [k, 0]));
+  for (const t of trades) {
+    equity += t.netPnL;
+    peak = Math.max(peak, equity);
+    maxDd = Math.max(maxDd, peak - equity);
+    exits[t.exitType] += 1;
+    dayPnl[t.date] = (dayPnl[t.date] || 0) + t.netPnL;
+    if (!months[t.monthKey]) months[t.monthKey] = { key: t.monthKey, label: `${t.monthShort} ${t.monthKey.slice(2, 4)}`, trades: 0, wins: 0, pnl: 0 };
+    const m = months[t.monthKey];
+    m.trades += 1;
+    if (t.isWin) m.wins += 1;
+    m.pnl = r2(m.pnl + t.netPnL);
+    const y = t.monthKey.slice(0, 4);
+    if (!years[y]) years[y] = { year: y, trades: 0, wins: 0, pnl: 0 };
+    years[y].trades += 1;
+    if (t.isWin) years[y].wins += 1;
+    years[y].pnl = r2(years[y].pnl + t.netPnL);
+  }
+  const wins = trades.filter((t) => t.isWin);
+  const grossWin = wins.reduce((s, t) => s + t.netPnL, 0);
+  const grossLoss = -trades.filter((t) => !t.isWin).reduce((s, t) => s + t.netPnL, 0);
+  const charges = trades.reduce((s, t) => s + t.charges, 0);
+  const days = Object.values(dayPnl);
+  return {
+    trades: trades.length,
+    wins: wins.length,
+    losses: trades.length - wins.length,
+    netPnL: r2(equity),
+    charges: r2(charges),
+    avgCharges: trades.length ? r2(charges / trades.length) : 0,
+    maxDrawdown: r2(maxDd),
+    profitFactor: grossLoss > 0 ? r2(grossWin / grossLoss) : null,
+    worstTrade: trades.length ? r2(Math.min(...trades.map((t) => t.netPnL))) : 0,
+    bestTrade: trades.length ? r2(Math.max(...trades.map((t) => t.netPnL))) : 0,
+    greenDays: days.filter((p) => p > 0).length,
+    redDays: days.filter((p) => p <= 0).length,
+    profitLockDays: trades.filter((t) => t.dayHalt?.startsWith('Daily profit')).length,
+    maxLossDays: trades.filter((t) => t.dayHalt?.startsWith('Daily max loss')).length,
+    exits,
+    months: Object.values(months).sort((a, b) => a.key.localeCompare(b.key)),
+    years: Object.values(years).sort((a, b) => a.year.localeCompare(b.year)),
+  };
+}
+
 function simulateDay(d, rule, brokerage, trades) {
   const { c } = d;
   let t = null;
@@ -414,18 +465,21 @@ async function runBacktest({ from, to, lots = 10, brokerage = COSTS.brokeragePer
   const firstLots = Math.min(lotCount, Math.max(1, Math.round(lotCount * rule.t1Share)));
   const split = (lotSize) => ({ total: lotCount * lotSize, scalp: firstLots * lotSize, runner: (lotCount - firstLots) * lotSize });
   const trades = [];
+  const flatDays = [];
   let tradingDays = 0;
 
   const build = (doneThrough) => {
-    const net = trades.reduce((s, t) => s + t.netPnL, 0);
+    const lastLot = trades.length ? trades[trades.length - 1].lotSize : lotSizeOn(to);
     return {
       version: VERSION,
       from,
       to,
       lots: lotCount,
+      qty: split(lastLot),
       rule: { ...rule, entryFrom: hhmm(rule.entryFrom), entryTo: hhmm(rule.entryTo), eod: hhmm(rule.eod), brokerage },
       tradingDays,
-      summary: { trades: trades.length, wins: trades.filter((t) => t.isWin).length, netPnL: r2(net) },
+      flatDays: [...flatDays],
+      summary: summarize(trades),
       trades: [...trades],
       ...(doneThrough ? { doneThrough } : {}),
     };
@@ -452,6 +506,7 @@ async function runBacktest({ from, to, lots = 10, brokerage = COSTS.brokeragePer
       const books = new Map();
       const lotSize = lotSizeOn(day.dateKey);
       const closes = c.map((x) => x.c);
+      const before = trades.length;
       simulateDay(
         {
           dateKey: day.dateKey,
@@ -472,6 +527,7 @@ async function runBacktest({ from, to, lots = 10, brokerage = COSTS.brokeragePer
         brokerage,
         trades,
       );
+      if (trades.length === before) flatDays.push(day.dateKey);
     });
     onPartial?.(build(chunk.to));
   }
