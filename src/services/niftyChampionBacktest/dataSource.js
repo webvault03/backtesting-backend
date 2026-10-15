@@ -1,5 +1,5 @@
 /**
- * NIFTY index 5-minute candles from Dhan (/charts/intraday) for the Strategy 1 Pro backtest.
+ * NIFTY index 5-minute candles from Dhan (/charts/intraday) for the NIFTY Champion backtest.
  *
  * Nothing is written to MongoDB or disk: past days are kept in this process's memory (cleared on restart) so
  * repeat runs of the same months do not refetch. Today is always refetched and only finished candles are used.

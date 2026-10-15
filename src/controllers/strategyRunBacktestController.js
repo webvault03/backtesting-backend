@@ -5,7 +5,6 @@ const cvdOi = require('../services/cvdOiBacktest/engine');
 const openOiWalls = require('../services/openOiWallsBacktest/engine');
 const haEma9 = require('../services/haEma9Backtest/engine');
 const oiStrikeFlow = require('../services/oiStrikeFlowBacktest/engine');
-const strategy1Pro = require('../services/strategy1ProBacktest/engine');
 const niftyChampion = require('../services/niftyChampionBacktest/engine');
 const { parseDateRange, numberIn, parseLots, jobHandlers } = require('./backtestRequest');
 
@@ -146,29 +145,6 @@ const haEma9Handlers = jobHandlers(
   haEma9.runBacktest,
 );
 
-const strategy1ProHandlers = jobHandlers(
-  'strategy-1-pro',
-  (body) => {
-    const range = parseDateRange(body, { historyStart: strategy1Pro.HISTORY_START });
-    const d = strategy1Pro.DEFAULT_RULE;
-    const t1Pts = numberIn(body.t1Pts, 10, 100, d.t1Pts);
-    return {
-      from: range.from,
-      to: range.to,
-      lots: parseLots(body.lots),
-      brokerage: numberIn(body.brokerage, 0, 1000, strategy1Pro.COSTS.brokeragePerOrder),
-      rule: {
-        maxTradesPerDay: Math.round(numberIn(body.maxTrades, 1, 5, d.maxTradesPerDay)),
-        t1Pts,
-        breakevenAt: Math.min(d.breakevenAt, t1Pts),
-        targetPts: Math.max(t1Pts, numberIn(body.targetPts, 20, 300, d.targetPts)),
-        slMax: Math.max(d.slMin, numberIn(body.slMax, 10, 60, d.slMax)),
-      },
-    };
-  },
-  strategy1Pro.runBacktest,
-);
-
 const niftyChampionHandlers = jobHandlers(
   'nifty-champion',
   (body) => {
@@ -221,8 +197,6 @@ const oiStrikeFlowHandlers = jobHandlers(
 module.exports = {
   postNiftyChampionBacktestRun: niftyChampionHandlers.run,
   getNiftyChampionBacktestJob: niftyChampionHandlers.status,
-  postStrategy1ProBacktestRun: strategy1ProHandlers.run,
-  getStrategy1ProBacktestJob: strategy1ProHandlers.status,
   postOiStrikeFlowBacktestRun: oiStrikeFlowHandlers.run,
   getOiStrikeFlowBacktestJob: oiStrikeFlowHandlers.status,
   postHaEma9BacktestRun: haEma9Handlers.run,

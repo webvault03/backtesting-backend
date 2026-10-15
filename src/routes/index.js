@@ -38,8 +38,6 @@ const {
   getHaEma9BacktestJob,
   postOiStrikeFlowBacktestRun,
   getOiStrikeFlowBacktestJob,
-  postStrategy1ProBacktestRun,
-  getStrategy1ProBacktestJob,
   postNiftyChampionBacktestRun,
   getNiftyChampionBacktestJob,
 } = require('../controllers/strategyRunBacktestController');
@@ -192,8 +190,6 @@ router.post('/backtest/ha-ema9/run', postHaEma9BacktestRun);
 router.get('/backtest/ha-ema9/jobs/:jobId', getHaEma9BacktestJob);
 router.post('/backtest/oi-strike-flow/run', postOiStrikeFlowBacktestRun);
 router.get('/backtest/oi-strike-flow/jobs/:jobId', getOiStrikeFlowBacktestJob);
-router.post('/backtest/strategy-1-pro/run', postStrategy1ProBacktestRun);
-router.get('/backtest/strategy-1-pro/jobs/:jobId', getStrategy1ProBacktestJob);
 router.post('/backtest/nifty-champion/run', postNiftyChampionBacktestRun);
 router.get('/backtest/nifty-champion/jobs/:jobId', getNiftyChampionBacktestJob);
 router.post('/backtest/jobs/:jobId/cancel', cancelBacktestJob);

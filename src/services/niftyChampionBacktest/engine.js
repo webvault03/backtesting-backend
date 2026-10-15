@@ -15,11 +15,11 @@
  * the option's open of the minute after NIFTY reached the level, minus real per-order costs.
  * P&L mode `spot`: NIFTY points × quantity minus a flat charge per trade (the original script's math).
  */
-const { loadCandles, TF } = require('../strategy1ProBacktest/dataSource');
+const { loadCandles, TF } = require('./dataSource');
 const { ensureDays, loadDays } = require('../oiCandleAgreeBacktest/dataSource');
 const { rangeChunks, chunkProgress } = require('../backtestChunks');
-const { tradeCosts } = require('../strategy1ProBacktest/costs');
-const { COSTS, lotSizeOn } = require('../strategy1ProBacktest/config');
+const { tradeCosts } = require('./costs');
+const { COSTS, lotSizeOn } = require('./config');
 
 const VERSION = 'NC8-1.0 (2026-10-15)';
 const HISTORY_START = '2020-08-03';
