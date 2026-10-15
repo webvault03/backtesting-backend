@@ -9,6 +9,11 @@ const OiFlowDayArchive = require('../../models/oiFlowDayArchive');
 const { findLatestAgreeSignal, niftyAtmStrike } = require('../../utils/oiCandleAgreeSignal');
 const { computeTrailLockPoints } = require('../../utils/openOiWallsTrail');
 const { addDays, ensureDays, loadDays } = require('./dataSource');
+const { rangeChunks, chunkProgress } = require('../backtestChunks');
+const { niftyLotSizeOn } = require('../../utils/niftyLotSize');
+
+const HISTORY_START = '2020-08-03';
+const WARMUP_DAYS = 7;
 
 const SESSION_OPEN = 9 * 60 + 15;
 const SESSION_LAST = 15 * 60 + 29;
@@ -17,7 +22,6 @@ const TRADE_TO = 14 * 60;
 const EOD = 15 * 60 + 15;
 const LOOKAROUND = 3;
 const STEP = 50;
-const LOT_SIZE = 65;
 const CHARGES = 100;
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
@@ -238,7 +242,9 @@ function signalCandle(day, bar) {
   return { high: r2(high), low: r2(low) };
 }
 
-function runDay(day, rows, rule, qty) {
+function runDay(day, rows, rule, lots) {
+  const lotSize = niftyLotSizeOn(day.dateKey);
+  const qty = lots * lotSize;
   const entry = findEntry(rows);
   if (!entry) return { dateKey: day.dateKey, trade: null };
   const { now: entryMin, res } = entry;
@@ -292,7 +298,11 @@ function runDay(day, rows, rule, qty) {
       maxGainPts: r2(sim.peak - entryPremium),
       niftyPts: r2(isPE ? entrySpot - sim.exitSpot : sim.exitSpot - entrySpot),
       points,
+      lots,
+      lotSize,
       qty,
+      grossPnL: r2(points * qty),
+      charges: CHARGES,
       netPnL,
       isWin: netPnL > 0,
     },
@@ -304,71 +314,98 @@ function summarize(trades) {
   let peak = 0;
   let maxDd = 0;
   const months = {};
+  const years = {};
   for (const t of trades) {
     equity += t.netPnL;
     peak = Math.max(peak, equity);
     maxDd = Math.max(maxDd, peak - equity);
-    if (!months[t.monthKey]) months[t.monthKey] = { key: t.monthKey, label: t.monthShort, trades: 0, wins: 0, pnl: 0 };
+    if (!months[t.monthKey]) months[t.monthKey] = { key: t.monthKey, label: `${t.monthShort} ${t.monthKey.slice(2, 4)}`, trades: 0, wins: 0, pnl: 0 };
     const m = months[t.monthKey];
     m.trades += 1;
     if (t.isWin) m.wins += 1;
     m.pnl = r2(m.pnl + t.netPnL);
+    const y = t.monthKey.slice(0, 4);
+    if (!years[y]) years[y] = { year: y, trades: 0, wins: 0, pnl: 0 };
+    years[y].trades += 1;
+    if (t.isWin) years[y].wins += 1;
+    years[y].pnl = r2(years[y].pnl + t.netPnL);
   }
-  const wins = trades.filter((t) => t.isWin).length;
+  const wins = trades.filter((t) => t.isWin);
+  const grossWin = wins.reduce((s, t) => s + t.netPnL, 0);
+  const grossLoss = -trades.filter((t) => !t.isWin).reduce((s, t) => s + t.netPnL, 0);
+  const charges = trades.reduce((s, t) => s + t.charges, 0);
   return {
     trades: trades.length,
-    wins,
-    losses: trades.length - wins,
+    wins: wins.length,
+    losses: trades.length - wins.length,
     netPnL: r2(equity),
+    charges: r2(charges),
+    avgCharges: trades.length ? r2(charges / trades.length) : 0,
     maxDrawdown: r2(maxDd),
+    profitFactor: grossLoss > 0 ? r2(grossWin / grossLoss) : null,
+    greenDays: trades.filter((t) => t.netPnL > 0).length,
+    redDays: trades.filter((t) => t.netPnL <= 0).length,
     months: Object.values(months).sort((a, b) => a.key.localeCompare(b.key)),
+    years: Object.values(years).sort((a, b) => a.year.localeCompare(b.year)),
   };
 }
 
 /**
- * @param {{ from: string, to: string, rule?: object, lots?: number, tapeSource?: 'dhan'|'auto', onProgress?: Function }} opts
+ * @param {{ from: string, to: string, rule?: object, lots?: number, tapeSource?: 'dhan'|'auto', onProgress?: Function, onPartial?: Function }} opts
  */
-async function runBacktest({ from, to, rule = { mode: 'candle', capPoints: 40 }, lots = 10, tapeSource = 'dhan', onProgress } = {}) {
-  const qty = Math.max(1, Math.round(lots)) * LOT_SIZE;
-  const fetchFrom = addDays(from, -7);
-  const live = await ensureDays(fetchFrom, to, { onProgress });
-  const raw = await loadDays(fetchFrom, to, live);
-  const days = raw.map(indexDay);
-
+async function runBacktest({ from, to, rule = { mode: 'candle', capPoints: null }, lots = 10, tapeSource = 'dhan', onProgress, onPartial } = {}) {
+  const lotCount = Math.max(1, Math.round(lots));
   const results = [];
-  for (let i = 0; i < days.length; i += 1) {
-    const day = days[i];
-    if (day.dateKey < from) continue;
-    onProgress?.({ phase: 'simulate', done: results.length, total: days.filter((d) => d.dateKey >= from).length, dateKey: day.dateKey });
-    let rows = null;
-    let tape = 'dhan';
-    if (tapeSource === 'auto') {
-      rows = await archiveTape(day.dateKey);
-      if (rows) tape = 'exact';
-    }
-    if (!rows) rows = buildTape(day, days[i - 1] || null);
-    const r = runDay(day, rows, rule, qty);
-    if (r.trade) r.trade.tape = tape;
-    results.push(r);
-  }
 
-  const trades = results.filter((r) => r.trade).map((r) => r.trade);
-  return {
-    from,
-    to,
-    rule,
-    lots,
-    qty,
-    tapeSource,
-    tradingDays: results.length,
-    noSignalDays: results.filter((r) => !r.trade && !r.skipped).map((r) => r.dateKey),
-    skippedDays: results.filter((r) => r.skipped).map((r) => ({ dateKey: r.dateKey, reason: r.skipped })),
-    summary: summarize(trades),
-    trades,
+  const build = (doneThrough) => {
+    const trades = results.filter((r) => r.trade).map((r) => r.trade);
+    return {
+      from,
+      to,
+      rule: { ...rule, entryFrom: hhmm(TRADE_FROM), entryTo: hhmm(TRADE_TO), eod: hhmm(EOD), charges: CHARGES },
+      lots: lotCount,
+      qty: lotCount * niftyLotSizeOn(to),
+      tapeSource,
+      tradingDays: results.length,
+      noSignalDays: results.filter((r) => !r.trade && !r.skipped).map((r) => r.dateKey),
+      skippedDays: results.filter((r) => r.skipped).map((r) => ({ dateKey: r.dateKey, reason: r.skipped })),
+      summary: summarize(trades),
+      trades,
+      ...(doneThrough ? { doneThrough } : {}),
+    };
   };
+
+  const chunks = rangeChunks(from, to, { warmupDays: WARMUP_DAYS });
+  for (const [ci, chunk] of chunks.entries()) {
+    const report = chunkProgress(onProgress, ci, chunks.length, chunk.label, () => ({ tradesSoFar: results.filter((r) => r.trade).length }));
+    const fetchFrom = addDays(chunk.from, -WARMUP_DAYS);
+    const live = await ensureDays(fetchFrom, chunk.to, { onProgress: report });
+    const days = (await loadDays(fetchFrom, chunk.to, live)).map(indexDay);
+    const total = days.filter((d) => d.dateKey >= chunk.from).length;
+    let done = 0;
+    for (let i = 0; i < days.length; i += 1) {
+      const day = days[i];
+      if (day.dateKey < chunk.from) continue;
+      report({ phase: 'simulate', done, total, dateKey: day.dateKey });
+      done += 1;
+      let rows = null;
+      let tape = 'dhan';
+      if (tapeSource === 'auto') {
+        rows = await archiveTape(day.dateKey);
+        if (rows) tape = 'exact';
+      }
+      if (!rows) rows = buildTape(day, days[i - 1] || null);
+      const r = runDay(day, rows, rule, lotCount);
+      if (r.trade) r.trade.tape = tape;
+      results.push(r);
+    }
+    onPartial?.(build(chunk.to));
+  }
+  return build(null);
 }
 
 module.exports = {
+  HISTORY_START,
   runBacktest,
   buildTape,
   findEntry,

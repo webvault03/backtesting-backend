@@ -5,7 +5,6 @@ const cvdOi = require('../services/cvdOiBacktest/engine');
 const openOiWalls = require('../services/openOiWallsBacktest/engine');
 const haEma9 = require('../services/haEma9Backtest/engine');
 const oiStrikeFlow = require('../services/oiStrikeFlowBacktest/engine');
-const niftyChampion = require('../services/niftyChampionBacktest/engine');
 const { parseDateRange, numberIn, parseLots, jobHandlers } = require('./backtestRequest');
 
 const oiTrailHandlers = jobHandlers(
@@ -145,32 +144,6 @@ const haEma9Handlers = jobHandlers(
   haEma9.runBacktest,
 );
 
-const niftyChampionHandlers = jobHandlers(
-  'nifty-champion',
-  (body) => {
-    const range = parseDateRange(body, { historyStart: niftyChampion.HISTORY_START });
-    const d = niftyChampion.DEFAULT_RULE;
-    const t1Pts = numberIn(body.t1Pts, 5, 100, d.t1Pts);
-    return {
-      from: range.from,
-      to: range.to,
-      lots: parseLots(body.lots),
-      brokerage: numberIn(body.brokerage, 0, 1000, niftyChampion.COSTS.brokeragePerOrder),
-      rule: {
-        pnlMode: body.pnlMode === 'spot' ? 'spot' : 'option',
-        t1Pts,
-        t2Pts: Math.max(t1Pts, numberIn(body.t2Pts, 5, 200, d.t2Pts)),
-        slPts: numberIn(body.slPts, 2, 50, d.slPts),
-        maxTradesPerDay: Math.round(numberIn(body.maxTrades, 1, 20, d.maxTradesPerDay)),
-        dailyTarget: numberIn(body.dailyTarget, 0, 10000000, d.dailyTarget),
-        dailyMaxLoss: numberIn(body.dailyMaxLoss, 0, 10000000, d.dailyMaxLoss),
-        tax: numberIn(body.tax, 0, 10000, d.tax),
-      },
-    };
-  },
-  niftyChampion.runBacktest,
-);
-
 const oiStrikeFlowHandlers = jobHandlers(
   'oi-strike-flow',
   (body) => {
@@ -195,8 +168,6 @@ const oiStrikeFlowHandlers = jobHandlers(
 );
 
 module.exports = {
-  postNiftyChampionBacktestRun: niftyChampionHandlers.run,
-  getNiftyChampionBacktestJob: niftyChampionHandlers.status,
   postOiStrikeFlowBacktestRun: oiStrikeFlowHandlers.run,
   getOiStrikeFlowBacktestJob: oiStrikeFlowHandlers.status,
   postHaEma9BacktestRun: haEma9Handlers.run,
