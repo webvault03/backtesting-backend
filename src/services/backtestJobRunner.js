@@ -2,20 +2,15 @@ const crypto = require('crypto');
 
 /**
  * Background backtest jobs shared by the "run on Dhan history" strategies.
- * One run at a time across all of them — Dhan history calls are rate limited.
- *
- * Jobs live in memory only (lost on server restart / nodemon reload).
- * Finished jobs are kept long enough for yearly runs to stay viewable after a long wait.
+ * One run at a time across all of them — Dhan history calls are rate limited. Finished jobs kept 30 min.
  */
 const jobs = new Map();
 let activeJobId = null;
-/** Keep finished results for 6 hours — yearly runs can take a long time to open / re-check. */
-const JOB_TTL_MS = 6 * 60 * 60 * 1000;
+const JOB_TTL_MS = 30 * 60 * 1000;
 
 function pruneJobs() {
   const now = Date.now();
   for (const [id, job] of jobs) {
-    // Never drop a still-running job — yearly / multi-month runs can exceed any short TTL.
     if (job.status === 'running') continue;
     if (job.finishedAt && now - job.finishedAt > JOB_TTL_MS) jobs.delete(id);
   }
@@ -66,13 +61,14 @@ function cancelJob(jobId) {
 /**
  * Starts `run(onProgress, onPartial)` in the background. `onPartial(result)` publishes results so far
  * (same shape as the final result). Returns `{ busy: true, job }` when another run is active, unless
- * `replace` is set and the active run is the same `kind` — then that run is cancelled first.
+ * `replace` is set — then that run is cancelled first (same or any kind), so refresh + Run always works.
  */
 function startJob(kind, params, run, { replace = false } = {}) {
   pruneJobs();
   if (activeJobId) {
     const active = jobs.get(activeJobId);
-    if (!(replace && active?.kind === kind)) return { busy: true, job: active ? publicJob(active) : null };
+    if (!replace) return { busy: true, job: active ? publicJob(active) : null };
+    // replace:true — free the single global slot (refresh / new Run must never get stuck behind a zombie)
     cancelJob(active.id);
   }
   const job = {
@@ -117,7 +113,6 @@ function startJob(kind, params, run, { replace = false } = {}) {
 }
 
 function getJob(jobId, have = 0) {
-  pruneJobs();
   const job = jobs.get(jobId);
   return job ? publicJob(job, have) : null;
 }
