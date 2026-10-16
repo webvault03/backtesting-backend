@@ -24,6 +24,10 @@ const {
   getOiCandleAgreeBacktestJob,
 } = require('../controllers/oiCandleAgreeBacktestController');
 const {
+  postSessionConfluenceBacktestRun,
+  getSessionConfluenceBacktestJob,
+} = require('../controllers/sessionConfluenceBacktestController');
+const {
   postOiTrailBacktestRun,
   getOiTrailBacktestJob,
   postShortStraddleBacktestRun,
@@ -36,6 +40,8 @@ const {
   getOpenOiWallsBacktestJob,
   postHaEma9BacktestRun,
   getHaEma9BacktestJob,
+  postHpEntryZoneBacktestRun,
+  getHpEntryZoneBacktestJob,
 } = require('../controllers/strategyRunBacktestController');
 const { postOiStrikeReportRun, getOiStrikeReportJob } = require('../controllers/oiStrikeReportController');
 const { getOiStrikeLive, postOiStrikeLiveBackfill } = require('../controllers/oiStrikeLiveController');
@@ -172,6 +178,8 @@ router.post('/report/oi-strikes/live/backfill', postOiStrikeLiveBackfill);
 
 router.post('/backtest/oi-candle-agree/run', postOiCandleAgreeBacktestRun);
 router.get('/backtest/oi-candle-agree/jobs/:jobId', getOiCandleAgreeBacktestJob);
+router.post('/backtest/session-confluence/run', postSessionConfluenceBacktestRun);
+router.get('/backtest/session-confluence/jobs/:jobId', getSessionConfluenceBacktestJob);
 router.post('/backtest/oi-trail/run', postOiTrailBacktestRun);
 router.get('/backtest/oi-trail/jobs/:jobId', getOiTrailBacktestJob);
 router.post('/backtest/short-straddle-next-day/run', postShortStraddleBacktestRun);
@@ -184,6 +192,8 @@ router.post('/backtest/open-oi-walls/run', postOpenOiWallsBacktestRun);
 router.get('/backtest/open-oi-walls/jobs/:jobId', getOpenOiWallsBacktestJob);
 router.post('/backtest/ha-ema9/run', postHaEma9BacktestRun);
 router.get('/backtest/ha-ema9/jobs/:jobId', getHaEma9BacktestJob);
+router.post('/backtest/hp-entry-zone/run', postHpEntryZoneBacktestRun);
+router.get('/backtest/hp-entry-zone/jobs/:jobId', getHpEntryZoneBacktestJob);
 router.post('/backtest/jobs/:jobId/cancel', cancelBacktestJob);
 router.post('/report/oi-strikes/run', postOiStrikeReportRun);
 router.get('/report/oi-strikes/jobs/:jobId', getOiStrikeReportJob);

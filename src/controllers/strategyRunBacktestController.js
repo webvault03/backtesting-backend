@@ -4,6 +4,7 @@ const gappingPlay = require('../services/gappingPlayBacktest/engine');
 const cvdOi = require('../services/cvdOiBacktest/engine');
 const openOiWalls = require('../services/openOiWallsBacktest/engine');
 const haEma9 = require('../services/haEma9Backtest/engine');
+const hpEntryZone = require('../services/hpEntryZoneBacktest/engine');
 const { parseDateRange, numberIn, parseLots, jobHandlers } = require('./backtestRequest');
 
 const oiTrailHandlers = jobHandlers(
@@ -143,7 +144,31 @@ const haEma9Handlers = jobHandlers(
   haEma9.runBacktest,
 );
 
+const hpEntryZoneHandlers = jobHandlers(
+  'hp-entry-zone',
+  (body) => {
+    const range = parseDateRange(body, { historyStart: '2020-01-01' });
+    if (range.to < hpEntryZone.HISTORY_START) throw new Error(`Option history starts ${hpEntryZone.HISTORY_START}`);
+    return {
+      from: range.from < hpEntryZone.HISTORY_START ? hpEntryZone.HISTORY_START : range.from,
+      to: range.to,
+      lots: parseLots(body.lots),
+      rule: {
+        leftBars: Math.round(numberIn(body.leftBars, 1, 20, hpEntryZone.DEFAULT_RULE.leftBars)),
+        rightBars: Math.round(numberIn(body.rightBars, 1, 20, hpEntryZone.DEFAULT_RULE.rightBars)),
+        bodyRatio: numberIn(body.bodyRatio, 0.3, 0.95, hpEntryZone.DEFAULT_RULE.bodyRatio),
+        maxCandlePts: numberIn(body.maxCandlePts, 1, 200, hpEntryZone.DEFAULT_RULE.maxCandlePts),
+        rr: numberIn(body.rr, 0.25, 10, hpEntryZone.DEFAULT_RULE.rr),
+        slippage: numberIn(body.slippage, 0, 5, hpEntryZone.DEFAULT_RULE.slippage),
+      },
+    };
+  },
+  hpEntryZone.runBacktest,
+);
+
 module.exports = {
+  postHpEntryZoneBacktestRun: hpEntryZoneHandlers.run,
+  getHpEntryZoneBacktestJob: hpEntryZoneHandlers.status,
   postHaEma9BacktestRun: haEma9Handlers.run,
   getHaEma9BacktestJob: haEma9Handlers.status,
   postOpenOiWallsBacktestRun: openOiWallsHandlers.run,
