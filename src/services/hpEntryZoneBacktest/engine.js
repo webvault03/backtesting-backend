@@ -1,15 +1,15 @@
 /**
- * High Probability Entry Zone — historical backtest.
+ * High Probability Entry Zone — historical backtest (NIFTY 5-min or 15-min).
  *
- * Signal, stop and target are all on NIFTY 5-min candles (Pine FVG + strong body + BOS).
- * The ATM option is only the vehicle: buy at its premium on entry, sell at its premium when
- * NIFTY hits SL / target / flip / eod.
+ * Signal on NIFTY TF (Pine FVG + strong body + BOS). ATM option is the fill only.
+ * Buy zone → CE · Sell zone → PE · entry at the minute after the signal candle closes.
  *
- * Buy zone → ATM CE · Sell zone → ATM PE.
- * Entry at the open of the minute after the signal candle closes.
- * NIFTY SL = signal candle low (CE) / high (PE) · risk = |entrySpot − SL| · target = entrySpot ± risk×rr.
- * Opposite zone while holding → flip. Consecutive same-side signals filtered. Open sold at eod.
- * Option +10/+20… levels are recorded for the table only (do not exit).
+ * NIFTY SL = confirmation (signal) candle low (CE) / high (PE).
+ * SL exits only when a later TF candle *closes* at/through the SL — wick touch does not cut.
+ *
+ * No fixed R target. Option premium trail (actual strike):
+ *   +10 → lock +2 · +20 → lock +10 · then peak − 10 (+30→+20, +50→+40, …).
+ * Retrace to lock → sell option. Opposite zone → flip. Open sold at eod.
  */
 const { addDays, ensureDays, loadDays } = require('../oiCandleAgreeBacktest/dataSource');
 const { rangeChunks, chunkProgress } = require('../backtestChunks');
@@ -23,19 +23,18 @@ const WARMUP_DAYS = 5;
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
 const DEFAULT_RULE = {
-  timeframe: 5,
+  timeframe: 15,
   lotSize: 65,
   leftBars: 5,
   rightBars: 5,
   bodyRatio: 0.6,
-  entryFrom: OPEN + 5,
+  entryFrom: OPEN + 15,
   entryTo: 15 * 60,
   eod: 15 * 60 + 15,
   /** Skip when the NIFTY signal candle (high − low) is bigger than this. */
-  maxCandlePts: 80,
-  rr: 1,
+  maxCandlePts: 120,
   slippage: 0,
-  /** Option pts above entry — recorded on the trade (table), do not exit. */
+  /** Option pts above entry — recorded on the trade (table). Trail also uses these rungs. */
   targets: [10, 20, 30, 40, 50],
 };
 
@@ -44,6 +43,13 @@ const signedPts = (n) => `${n >= 0 ? '+' : ''}${r2(n)}`;
 const hhmm = (m) => `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
 const fmt = (n) => Number(n).toLocaleString('en-IN', { maximumFractionDigits: 2, minimumFractionDigits: 2 });
 const span = (c) => `${hhmm(c.start)}–${hhmm(c.end + 1)}`;
+
+/** Option trail lock (pts above entry): +10→+2, +20→+10, then peak−10 carry-forward. */
+function trailLock(gain) {
+  if (gain >= 20) return Math.max(10, Math.floor(gain) - 10);
+  if (gain >= 10) return 2;
+  return null;
+}
 
 function optionCharges(buyValue, sellValue) {
   const brokerage = 40;
@@ -84,10 +90,6 @@ function buildCandles(days, tf) {
   return out;
 }
 
-/**
- * Annotate candles with Pine-style HP Entry Zone signals.
- * Pivot confirms `rightBars` after the swing bar; FVG / strong body / BOS on the closed bar.
- */
 function annotateSignals(candles, { leftBars, rightBars, bodyRatio }) {
   let lastPh = null;
   let lastPl = null;
@@ -155,12 +157,17 @@ function priceAt(book, minute, ahead = 5) {
 }
 
 const EXIT_REASON = {
-  SL: 'NIFTY stop loss',
-  TARGET: 'NIFTY target',
+  SL: 'NIFTY SL (TF close)',
+  TRAIL: 'Option trail lock',
   FLIP: 'Opposite zone — flip',
   EOD: 'Day close',
   OPEN: 'Still open (marked)',
 };
+
+function exitReason(type, tf) {
+  if (type === 'SL') return `NIFTY SL (${tf}-min close)`;
+  return EXIT_REASON[type] || type;
+}
 
 function summarize(trades) {
   let equity = 0;
@@ -169,12 +176,12 @@ function summarize(trades) {
   const months = {};
   const years = {};
   const dayPnl = {};
-  const exits = { SL: 0, TARGET: 0, FLIP: 0, EOD: 0, OPEN: 0 };
+  const exits = { SL: 0, TRAIL: 0, FLIP: 0, EOD: 0, OPEN: 0 };
   for (const t of trades) {
     equity += t.netPnL;
     peak = Math.max(peak, equity);
     maxDd = Math.max(maxDd, peak - equity);
-    exits[t.exitType] += 1;
+    exits[t.exitType] = (exits[t.exitType] || 0) + 1;
     dayPnl[t.date] = (dayPnl[t.date] || 0) + t.netPnL;
     if (!months[t.monthKey]) months[t.monthKey] = { key: t.monthKey, label: `${t.monthShort} ${t.monthKey.slice(2, 4)}`, trades: 0, wins: 0, pnl: 0 };
     const m = months[t.monthKey];
@@ -212,6 +219,8 @@ function summarize(trades) {
 }
 
 function simulateDay({ day, dayCandles, nifty, rule, qty, lastMin, isToday, trades, skipped }) {
+  const tf = rule.timeframe;
+  const tfLabel = `${tf}-min`;
   const books = new Map();
   const bookFor = (side, strike) => {
     const key = `${side}-${strike}`;
@@ -219,7 +228,11 @@ function simulateDay({ day, dayCandles, nifty, rule, qty, lastMin, isToday, trad
     return books.get(key);
   };
   const signalAt = new Map();
-  for (const c of dayCandles) if (c.signal) signalAt.set(c.end + 1, c);
+  const candleCloseAt = new Map();
+  for (const c of dayCandles) {
+    candleCloseAt.set(c.end + 1, c);
+    if (c.signal) signalAt.set(c.end + 1, c);
+  }
   const endMin = Math.min(rule.eod, lastMin + 1);
   const month = Number(day.dateKey.slice(5, 7));
   let pos = null;
@@ -245,7 +258,6 @@ function simulateDay({ day, dayCandles, nifty, rule, qty, lastMin, isToday, trad
 
     const entryPremium = r2(px.price + rule.slippage);
     const entrySpot = r2(nifty.get(px.min)?.o ?? spot);
-    // NIFTY stop from the signal candle; target = same risk × rr on NIFTY.
     const stopSpot = pe ? r2(sc.h) : r2(sc.l);
     const riskPts = pe ? r2(stopSpot - entrySpot) : r2(entrySpot - stopSpot);
     if (riskPts <= 0) {
@@ -255,7 +267,6 @@ function simulateDay({ day, dayCandles, nifty, rule, qty, lastMin, isToday, trad
           : `NIFTY ${fmt(entrySpot)} already at/below signal low ${fmt(stopSpot)}`,
       );
     }
-    const targetSpot = pe ? r2(entrySpot - riskPts * rule.rr) : r2(entrySpot + riskPts * rule.rr);
     const bos = pe ? sc.lastPl : sc.lastPh;
     const levels = (rule.targets || []).map((pts) => ({ pts, premium: r2(entryPremium + pts), hit: false, time: null }));
 
@@ -269,8 +280,8 @@ function simulateDay({ day, dayCandles, nifty, rule, qty, lastMin, isToday, trad
       entryPremium,
       entrySpot,
       stopSpot,
-      targetSpot,
       riskPts,
+      trailLockPts: null,
       high: { px: entryPremium, min: px.min },
       low: { px: entryPremium, min: px.min },
       levels,
@@ -284,11 +295,11 @@ function simulateDay({ day, dayCandles, nifty, rule, qty, lastMin, isToday, trad
         },
         {
           time: hhmm(sc.end + 1),
-          text: `NIFTY ${span(sc)} O ${fmt(sc.o)} H ${fmt(sc.h)} L ${fmt(sc.l)} C ${fmt(sc.c)} · size ${candlePts} pts (≤ ${rule.maxCandlePts}) · swing H ${fmt(sc.lastPh)} / L ${fmt(sc.lastPl)}`,
+          text: `NIFTY ${tfLabel} ${span(sc)} O ${fmt(sc.o)} H ${fmt(sc.h)} L ${fmt(sc.l)} C ${fmt(sc.c)} · size ${candlePts} pts · swing H ${fmt(sc.lastPh)} / L ${fmt(sc.lastPl)}`,
         },
         {
           time: hhmm(px.min),
-          text: `Bought ${strike} ${side} at ₹${fmt(entryPremium)} · NIFTY ${fmt(entrySpot)} · SL ${fmt(stopSpot)} (signal candle ${pe ? 'high' : 'low'}, risk ${fmt(riskPts)} pts) · target ${fmt(targetSpot)} (1 : ${rule.rr})`,
+          text: `Bought ${strike} ${side} at ₹${fmt(entryPremium)} · NIFTY ${fmt(entrySpot)} · SL ${fmt(stopSpot)} (signal ${pe ? 'high' : 'low'}, exit only on later ${tfLabel} *close*) · trail +10→+2 / +20→+10 / then peak−10`,
         },
       ],
     };
@@ -302,6 +313,14 @@ function simulateDay({ day, dayCandles, nifty, rule, qty, lastMin, isToday, trad
     if (lo < p.low.px) p.low = { px: lo, min: m };
     for (const lv of p.levels) {
       if (!lv.hit && hi >= lv.premium) Object.assign(lv, { hit: true, time: hhmm(m) });
+    }
+    const next = trailLock(hi - p.entryPremium);
+    if (next != null && (p.trailLockPts == null || next > p.trailLockPts)) {
+      p.trailLockPts = next;
+      p.events.push({
+        time: hhmm(m),
+        text: `Trail armed / raised → lock +${next} pts (option ₹${fmt(p.entryPremium + next)}) · peak ${signedPts(hi - p.entryPremium)}`,
+      });
     }
     p.last = bar.c;
   };
@@ -326,7 +345,7 @@ function simulateDay({ day, dayCandles, nifty, rule, qty, lastMin, isToday, trad
     p.events.push({ time: hhmm(exitMin), text: `${text} → sold ${p.strike} ${p.side} at ₹${fmt(exitPremium)} · ${points >= 0 ? '+' : ''}${points} pts · NIFTY ${fmt(exitSpot)}` });
     p.events.push({
       time: hhmm(exitMin),
-      text: `Option path entry → exit: high ₹${fmt(highPx)} (${signedPts(maxGainPts)}) at ${hhmm(p.high.min)} · low ₹${fmt(lowPx)} (${signedPts(maxDropPts)}) at ${hhmm(p.low.min)} · levels ${(p.levels || []).map((l) => `+${l.pts}${l.hit ? ` ${l.time}` : ' no'}`).join(' · ') || 'none'}`,
+      text: `Option path: high ₹${fmt(highPx)} (${signedPts(maxGainPts)}) at ${hhmm(p.high.min)} · low ₹${fmt(lowPx)} (${signedPts(maxDropPts)}) at ${hhmm(p.low.min)} · trail lock ${p.trailLockPts == null ? '—' : `+${p.trailLockPts}`} · levels ${(p.levels || []).map((l) => `+${l.pts}${l.hit ? ` ${l.time}` : ' no'}`).join(' · ') || 'none'}`,
     });
     const sc = p.sc;
     trades.push({
@@ -345,11 +364,10 @@ function simulateDay({ day, dayCandles, nifty, rule, qty, lastMin, isToday, trad
       bearishFvg: Boolean(sc.bearishFvg),
       candlePts: p.candlePts,
       stopSpot: p.stopSpot,
-      targetSpot: p.targetSpot,
       riskPts: p.riskPts,
-      /** @deprecated alias kept for older UI — NIFTY stop */
       stop: p.stopSpot,
-      targetPremium: p.targetSpot,
+      trailLockPts: p.trailLockPts,
+      trailStop: p.trailLockPts == null ? null : r2(p.entryPremium + p.trailLockPts),
       entryTime: hhmm(p.startMin),
       entrySpot: p.entrySpot,
       entryPremium: p.entryPremium,
@@ -367,7 +385,8 @@ function simulateDay({ day, dayCandles, nifty, rule, qty, lastMin, isToday, trad
       niftyPts: r2(p.side === 'CE' ? exitSpot - p.entrySpot : p.entrySpot - exitSpot),
       exitPremium,
       exitType: type,
-      exitReason: EXIT_REASON[type],
+      exitReason: exitReason(type, tf),
+      timeframe: tf,
       points,
       grossPnL,
       charges,
@@ -393,47 +412,37 @@ function simulateDay({ day, dayCandles, nifty, rule, qty, lastMin, isToday, trad
     }
     if (!pos || m < pos.startMin) continue;
 
-    const n = nifty.get(m);
     const b = pos.book.get(m);
     if (b) markPath(pos, m, b);
-    if (!n) continue;
 
-    const pe = pos.side === 'PE';
-    const startSpot = m === pos.startMin ? pos.entrySpot : n.o;
-
-    // NIFTY stop first
-    const hitSl = pe ? n.h >= pos.stopSpot : n.l <= pos.stopSpot;
-    if (hitSl) {
-      const already = pe ? startSpot >= pos.stopSpot : startSpot <= pos.stopSpot;
-      const fill = priceAt(pos.book, m, 0) || (b ? { min: m, price: already ? b.o : b.o } : null) || priceAt(pos.book, m, 3);
-      const exitSpot = already ? startSpot : pos.stopSpot;
-      close(
-        pos,
-        fill,
-        m,
-        'SL',
-        `NIFTY ${pe ? 'rose' : 'fell'} to ${fmt(pe ? n.h : n.l)} at ${hhmm(m)} → SL ${fmt(pos.stopSpot)} hit`,
-        exitSpot,
-      );
-      pos = null;
-      continue;
+    // Option trail — on 1-min strike premium (touch lock → exit)
+    if (pos.trailLockPts != null && b) {
+      const lockPx = r2(pos.entryPremium + pos.trailLockPts);
+      if (b.l <= lockPx) {
+        const price = b.o <= lockPx ? b.o : lockPx;
+        close(pos, { min: m, price }, m, 'TRAIL', `Option trailed to lock ₹${fmt(lockPx)} (+${pos.trailLockPts} pts) at ${hhmm(m)}`);
+        pos = null;
+        continue;
+      }
     }
 
-    // NIFTY target
-    const hitTarget = pe ? n.l <= pos.targetSpot : n.h >= pos.targetSpot;
-    if (hitTarget) {
-      const already = pe ? startSpot <= pos.targetSpot : startSpot >= pos.targetSpot;
-      const fill = priceAt(pos.book, m, 0) || (b ? { min: m, price: b.o } : null) || priceAt(pos.book, m, 3);
-      const exitSpot = already ? startSpot : pos.targetSpot;
-      close(
-        pos,
-        fill,
-        m,
-        'TARGET',
-        `NIFTY reached ${fmt(pe ? n.l : n.h)} at ${hhmm(m)} → target ${fmt(pos.targetSpot)} hit`,
-        exitSpot,
-      );
-      pos = null;
+    // NIFTY SL — only when a *completed* TF candle closes through the stop (not wick touch)
+    const closed = candleCloseAt.get(m);
+    if (closed && closed.start !== pos.sc.start) {
+      const pe = pos.side === 'PE';
+      const slClose = pe ? closed.c >= pos.stopSpot : closed.c <= pos.stopSpot;
+      if (slClose) {
+        const fill = priceAt(pos.book, m, 0) || (b ? { min: m, price: b.o } : null) || priceAt(pos.book, m, 3);
+        close(
+          pos,
+          fill,
+          m,
+          'SL',
+          `NIFTY ${tfLabel} ${span(closed)} closed at ${fmt(closed.c)} ${pe ? '≥' : '≤'} SL ${fmt(pos.stopSpot)} (wick alone does not cut)`,
+          r2(closed.c),
+        );
+        pos = null;
+      }
     }
   }
   if (pos) {
@@ -448,7 +457,14 @@ function simulateDay({ day, dayCandles, nifty, rule, qty, lastMin, isToday, trad
  * @param {{ from: string, to: string, lots?: number, rule?: Partial<typeof DEFAULT_RULE>, onProgress?: Function, onPartial?: Function }} opts
  */
 async function runBacktest({ from, to, lots = 10, rule: ruleIn = {}, onProgress, onPartial } = {}) {
-  const rule = { ...DEFAULT_RULE, ...ruleIn };
+  const timeframe = Number(ruleIn.timeframe) === 5 ? 5 : 15;
+  const rule = {
+    ...DEFAULT_RULE,
+    ...ruleIn,
+    timeframe,
+    // First entries after one full TF bar from open (5→09:20, 15→09:30) unless caller overrides.
+    entryFrom: Number.isFinite(ruleIn.entryFrom) ? ruleIn.entryFrom : OPEN + timeframe,
+  };
   const lotCount = Math.max(1, Math.round(lots));
   const qty = lotCount * rule.lotSize;
   const trades = [];
@@ -514,4 +530,4 @@ async function runBacktest({ from, to, lots = 10, rule: ruleIn = {}, onProgress,
   return build(null);
 }
 
-module.exports = { runBacktest, DEFAULT_RULE, HISTORY_START };
+module.exports = { runBacktest, DEFAULT_RULE, HISTORY_START, trailLock };
