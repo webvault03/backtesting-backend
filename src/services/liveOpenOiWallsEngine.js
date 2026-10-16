@@ -918,12 +918,28 @@ async function fetchOiSnapshot(clock, { force = false, futLtp = null } = {}) {
       engineState.lastFutError = err.message || 'Spot price failed';
     }
   }
-  const snapshot = await getOptionChainOiSnapshot({
-    symbol,
-    expiry,
-    lookaroundStrikes: Number(engineState.settings.strikeLookaround) || DEFAULT_LOOKAROUND,
-    spotOverride: Number.isFinite(fut) ? fut : null,
-  });
+  let snapshot;
+  try {
+    snapshot = await getOptionChainOiSnapshot({
+      symbol,
+      expiry,
+      lookaroundStrikes: Number(engineState.settings.strikeLookaround) || DEFAULT_LOOKAROUND,
+      spotOverride: Number.isFinite(fut) ? fut : null,
+    });
+  } catch (err) {
+    const msg = String(err.message || 'OI snapshot failed');
+    engineState.lastOiError = msg;
+    if (engineState.lastOiSnapshot) {
+      return {
+        snapshot: engineState.lastOiSnapshot,
+        expiry: engineState.expiry || expiry,
+        fut: Number.isFinite(fut) ? fut : engineState.lastFut,
+        cached: true,
+        stale: true,
+      };
+    }
+    return null;
+  }
   engineState.lastOiFetchAt = Date.now();
   engineState.lastOiError = null;
   engineState.lastOiSnapshot = snapshot;

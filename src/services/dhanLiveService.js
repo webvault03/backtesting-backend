@@ -194,13 +194,14 @@ const OPTION_CHAIN_MIN_INTERVAL_MS = 4000;
 const OPTION_CHAIN_STALE_MAX_AGE_MS = 5 * 60 * 1000;
 const OPTION_CHAIN_429_COOLDOWN_MS = 90 * 1000;
 const OPTION_CHAIN_5XX_COOLDOWN_MS = 12 * 1000;
-/** When no warm cache exists, do not hard-block for the full cooldown — probe sooner. */
-const OPTION_CHAIN_EMPTY_CACHE_PROBE_MS = 20000;
+/** Cap how long live callers wait out a cooldown before one coalesced probe (empty cache). */
+const OPTION_CHAIN_COOLDOWN_WAIT_CAP_MS = 25 * 1000;
 const OPTION_CHAIN_HTTP_TIMEOUT_MS = 12000;
 const optionChainCache = new Map();
 const optionChainInflight = new Map();
 let optionChainRateLimitedUntil = 0;
-let optionChainLastEmptyProbeAt = 0;
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 function isHttpRateLimitError(error) {
   const status = Number(error?.response?.status);
@@ -325,37 +326,46 @@ async function fetchOptionChain({ symbol, expiry }) {
 /** Dhan option chain is heavily rate-limited — coalesce callers and reuse stale data on 429/5xx. */
 async function fetchOptionChainCached({ symbol, expiry, allowStale = true } = {}) {
   const key = `${String(symbol).toUpperCase()}|${String(expiry)}`;
+
+  // Join early so cooldown waiters share one probe (avoids stampede after 429).
+  if (optionChainInflight.has(key)) {
+    return optionChainInflight.get(key);
+  }
+
   const now = Date.now();
   const cached = optionChainCache.get(key);
 
   if (optionChainRateLimitedUntil && now < optionChainRateLimitedUntil) {
     if (cached && allowStale) return cached.data;
-    // No cache yet (common right after boot) — allow a sparse probe so engines are not stuck ~60s.
-    const canProbeEmpty =
-      !cached && now - optionChainLastEmptyProbeAt >= OPTION_CHAIN_EMPTY_CACHE_PROBE_MS;
-    if (!canProbeEmpty) {
-      const waitSec = Math.ceil(
-        Math.min(
-          optionChainRateLimitedUntil - now,
-          Math.max(0, OPTION_CHAIN_EMPTY_CACHE_PROBE_MS - (now - optionChainLastEmptyProbeAt)),
-        ) / 1000,
-      );
+    if (!allowStale) {
+      const waitSec = Math.ceil((optionChainRateLimitedUntil - now) / 1000);
       throw new Error(`Dhan option chain cooling down — retry in ~${Math.max(1, waitSec)}s`);
     }
-    optionChainLastEmptyProbeAt = now;
-    // fall through to fetch
-  }
-
-  if (cached && now - cached.at < OPTION_CHAIN_MIN_INTERVAL_MS) {
+    // allowStale + empty cache: fall through into a single inflight that waits, then probes.
+  } else if (cached && now - cached.at < OPTION_CHAIN_MIN_INTERVAL_MS) {
     return cached.data;
-  }
-
-  if (optionChainInflight.has(key)) {
-    return optionChainInflight.get(key);
   }
 
   const task = (async () => {
     try {
+      let t = Date.now();
+      if (optionChainRateLimitedUntil && t < optionChainRateLimitedUntil) {
+        const warm = optionChainCache.get(key);
+        if (warm && allowStale) return warm.data;
+        const waitMs = Math.min(optionChainRateLimitedUntil - t, OPTION_CHAIN_COOLDOWN_WAIT_CAP_MS);
+        if (waitMs > 0 && allowStale) {
+          await sleep(waitMs + 50);
+        } else if (!allowStale) {
+          const waitSec = Math.ceil(Math.max(0, optionChainRateLimitedUntil - Date.now()) / 1000);
+          throw new Error(`Dhan option chain cooling down — retry in ~${Math.max(1, waitSec)}s`);
+        }
+      }
+
+      const fresh = optionChainCache.get(key);
+      if (fresh && Date.now() - fresh.at < OPTION_CHAIN_MIN_INTERVAL_MS) {
+        return fresh.data;
+      }
+
       const data = await fetchOptionChain({ symbol, expiry });
       // Never cache empty / invalid chains (would poison every caller for MIN_INTERVAL).
       if (!data?.oc || !Object.keys(data.oc).length) {
@@ -366,6 +376,7 @@ async function fetchOptionChainCached({ symbol, expiry, allowStale = true } = {}
       return data;
     } catch (error) {
       const status = axiosStatus(error);
+      const cachedNow = optionChainCache.get(key);
       if (isHttpRateLimitError(error)) {
         optionChainRateLimitedUntil = Date.now() + OPTION_CHAIN_429_COOLDOWN_MS;
       } else if (isTransientOptionChainError(error)) {
@@ -377,16 +388,16 @@ async function fetchOptionChainCached({ symbol, expiry, allowStale = true } = {}
 
       if (
         allowStale
-        && cached
-        && cached.data?.oc
-        && Object.keys(cached.data.oc).length
-        && now - cached.at < OPTION_CHAIN_STALE_MAX_AGE_MS
+        && cachedNow
+        && cachedNow.data?.oc
+        && Object.keys(cachedNow.data.oc).length
+        && Date.now() - cachedNow.at < OPTION_CHAIN_STALE_MAX_AGE_MS
         && (isHttpRateLimitError(error) || isTransientOptionChainError(error) || /oc empty/i.test(String(error?.message || '')))
       ) {
         // Keep board alive on Dhan blips (500 / timeout / 429 / empty).
-        cached.stale = true;
-        cached.staleReason = status ? `HTTP_${status}` : String(error.code || error.message || 'ERR');
-        return cached.data;
+        cachedNow.stale = true;
+        cachedNow.staleReason = status ? `HTTP_${status}` : String(error.code || error.message || 'ERR');
+        return cachedNow.data;
       }
       throw error;
     } finally {

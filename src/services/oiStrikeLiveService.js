@@ -18,7 +18,11 @@ const {
   oiTapeRetainDateKeys,
 } = require('../utils/dateTime');
 const { isNseCashTradingDay } = require('./nseHolidayService');
-const { getNearestWeeklyExpiry, getOptionChainOiSnapshot } = require('./dhanLiveService');
+const {
+  getNearestWeeklyExpiry,
+  getOptionChainOiSnapshot,
+  getOptionChainRateLimitStatus,
+} = require('./dhanLiveService');
 
 const SYMBOL = 'NIFTY';
 const SESSION_FROM = 9 * 60 + 15;
@@ -184,6 +188,14 @@ async function tick() {
     }
     if (!inSession) return;
 
+    // Soft skip while Dhan cooldown is active and we already have a warm minute —
+    // waiting happens inside the shared chain cache; avoid stacking parallel waits.
+    const rate = getOptionChainRateLimitStatus();
+    if (rate.coolingDown && state.bar && state.lastTickAt) {
+      state.lastError = `Dhan option chain cooling — next probe ~${Math.max(1, Math.ceil((rate.until - Date.now()) / 1000))}s`;
+      return;
+    }
+
     if (!state.expiry) state.expiry = await getNearestWeeklyExpiry(SYMBOL);
     const snapshot = await getOptionChainOiSnapshot({ symbol: SYMBOL, expiry: state.expiry, lookaroundStrikes: LOOKAROUND });
     if (!Number.isFinite(Number(snapshot?.spot))) throw new Error('Option chain has no NIFTY price');
@@ -199,6 +211,7 @@ async function tick() {
     state.lastError = null;
     await maybeBackfill(now.dateKey, now.minutes);
   } catch (err) {
+    // Rate-limit / cooling is expected under multi-engine load — keep tape, retry next loop.
     state.lastError = err.message;
   } finally {
     state.inFlight = false;
