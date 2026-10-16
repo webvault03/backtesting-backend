@@ -36,10 +36,6 @@ const {
   getOpenOiWallsBacktestJob,
   postHaEma9BacktestRun,
   getHaEma9BacktestJob,
-  postOiStrikeFlowBacktestRun,
-  getOiStrikeFlowBacktestJob,
-  postPriceActionScalpBacktestRun,
-  getPriceActionScalpBacktestJob,
 } = require('../controllers/strategyRunBacktestController');
 const { postOiStrikeReportRun, getOiStrikeReportJob } = require('../controllers/oiStrikeReportController');
 const { getOiStrikeLive, postOiStrikeLiveBackfill } = require('../controllers/oiStrikeLiveController');
@@ -188,10 +184,6 @@ router.post('/backtest/open-oi-walls/run', postOpenOiWallsBacktestRun);
 router.get('/backtest/open-oi-walls/jobs/:jobId', getOpenOiWallsBacktestJob);
 router.post('/backtest/ha-ema9/run', postHaEma9BacktestRun);
 router.get('/backtest/ha-ema9/jobs/:jobId', getHaEma9BacktestJob);
-router.post('/backtest/oi-strike-flow/run', postOiStrikeFlowBacktestRun);
-router.get('/backtest/oi-strike-flow/jobs/:jobId', getOiStrikeFlowBacktestJob);
-router.post('/backtest/price-action-scalp/run', postPriceActionScalpBacktestRun);
-router.get('/backtest/price-action-scalp/jobs/:jobId', getPriceActionScalpBacktestJob);
 router.post('/backtest/jobs/:jobId/cancel', cancelBacktestJob);
 router.post('/report/oi-strikes/run', postOiStrikeReportRun);
 router.get('/report/oi-strikes/jobs/:jobId', getOiStrikeReportJob);
