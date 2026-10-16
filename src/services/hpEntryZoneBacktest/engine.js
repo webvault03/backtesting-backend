@@ -191,16 +191,16 @@ function priceAt(book, minute, ahead = 5) {
 }
 
 const EXIT_REASON = {
-  SL: 'NIFTY SL (TF close)',
-  TARGET: 'NIFTY target',
-  FLIP: 'Opposite zone — flip',
-  TIME: 'Max hold days',
+  SL: 'Sold option · spot SL',
+  TARGET: 'Sold option · spot target',
+  FLIP: 'Sold option · flip',
+  TIME: 'Sold option · max hold',
   OPEN: 'Still open (marked)',
 };
 
 function exitReason(type, tf, rr) {
-  if (type === 'SL') return `NIFTY SL (${tf}-min close)`;
-  if (type === 'TARGET') return `NIFTY target ${rr ?? 2}R`;
+  if (type === 'SL') return `Sold option · spot SL (${tf}-min close)`;
+  if (type === 'TARGET') return `Sold option · spot ${rr ?? 2}R`;
   return EXIT_REASON[type] || type;
 }
 
