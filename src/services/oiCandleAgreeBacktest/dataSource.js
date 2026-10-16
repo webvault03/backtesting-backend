@@ -1,12 +1,9 @@
 /**
  * Historical NIFTY + weekly option minute data for the backtests.
  *
- * Nothing is written to MongoDB: fetched past days are kept gzipped in this process's memory
- * (bounded, cleared on restart) so repeat runs of the same months do not refetch from Dhan.
- *
- * Per trading day:
- *   nifty: { m: [minute], o, h, l, c }
- *   CE / PE: { [strike]: { m: [minute], o, h, l, c, oi } }   ← rolling ATM±6, nearest weekly
+ * expiryCode (Dhan rolling weekly):
+ *   1 = nearest weekly — ATM±6 (default)
+ *   2 = next weekly — ATM±3 (overnight / liquid week)
  */
 const zlib = require('zlib');
 const axios = require('axios/dist/node/axios.cjs');
@@ -15,19 +12,27 @@ const { getDhanClientId } = require('../dhanTokenStore');
 const { getIstClock } = require('../../utils/dateTime');
 
 const DHAN = 'https://api.dhan.co/v2';
-const OFFSETS = [-6, -5, -4, -3, -2, -1, 0, 1, 2, 3, 4, 5, 6];
+const OFFSETS_NEAR = [-6, -5, -4, -3, -2, -1, 0, 1, 2, 3, 4, 5, 6];
+const OFFSETS_NEXT = [-3, -2, -1, 0, 1, 2, 3];
 const WINDOW_DAYS = 25;
 const REQUEST_GAP_MS = 1100;
 const MAX_IN_FLIGHT = 4;
-
-/** Most days kept in memory (≈60 KB each gzipped); oldest-used days are dropped first. */
 const MEMORY_MAX_DAYS = 2300;
 const memory = new Map();
 
-function remember(dateKey, entry) {
-  memory.delete(dateKey);
-  memory.set(dateKey, entry);
+function memKey(dateKey, expiryCode) {
+  return `${dateKey}:e${expiryCode}`;
+}
+
+function remember(dateKey, expiryCode, entry) {
+  const key = memKey(dateKey, expiryCode);
+  memory.delete(key);
+  memory.set(key, entry);
   while (memory.size > MEMORY_MAX_DAYS) memory.delete(memory.keys().next().value);
+}
+
+function offsetsFor(expiryCode) {
+  return expiryCode === 2 ? OFFSETS_NEXT : OFFSETS_NEAR;
 }
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -96,12 +101,13 @@ function unpack(buf) {
   return JSON.parse(zlib.gunzipSync(buf).toString('utf8'));
 }
 
-async function fetchWindow(from, to, onProgress) {
+async function fetchWindow(from, to, onProgress, expiryCode = 1) {
   const days = new Map();
   const dayOf = (dk) => {
-    if (!days.has(dk)) days.set(dk, { nifty: { m: [], o: [], h: [], l: [], c: [] }, CE: {}, PE: {} });
+    if (!days.has(dk)) days.set(dk, { nifty: { m: [], o: [], h: [], l: [], c: [] }, CE: {}, PE: {}, expiryCode });
     return days.get(dk);
   };
+  const offsets = offsetsFor(expiryCode);
 
   const n = await dhanPost('/charts/intraday', {
     securityId: '13', exchangeSegment: 'IDX_I', instrument: 'INDEX', interval: '1', oi: false,
@@ -120,21 +126,20 @@ async function fetchWindow(from, to, onProgress) {
 
   const series = [];
   for (const type of ['CALL', 'PUT']) {
-    for (const off of OFFSETS) series.push({ type, off });
+    for (const off of offsets) series.push({ type, off });
   }
   const responses = new Map();
   await mapLimit(series, MAX_IN_FLIGHT, async ({ type, off }) => {
     const strike = off === 0 ? 'ATM' : off > 0 ? `ATM+${off}` : `ATM${off}`;
     const res = await dhanPost('/charts/rollingoption', {
       exchangeSegment: 'NSE_FNO', interval: '1', securityId: 13, instrument: 'OPTIDX', expiryFlag: 'WEEK',
-      expiryCode: 1, strike, drvOptionType: type, requiredData: ['open', 'high', 'low', 'close', 'oi', 'strike'],
+      expiryCode, strike, drvOptionType: type, requiredData: ['open', 'high', 'low', 'close', 'oi', 'strike'],
       fromDate: from, toDate: addDays(to, 1),
     });
     responses.set(`${type}${off}`, res);
     onProgress?.(1);
   });
 
-  // Merge in fixed offset order so the result does not depend on response arrival order.
   for (const { type, off } of series) {
     const side = type === 'CALL' ? 'CE' : 'PE';
     const res = responses.get(`${type}${off}`);
@@ -144,7 +149,6 @@ async function fetchWindow(from, to, onProgress) {
       if (p.dateKey < from || p.dateKey > to) return;
       const book = dayOf(p.dateKey)[side];
       const k = String(s.strike[i]);
-      // One strike shows up in several offset series as ATM moves — merge by minute.
       if (!book[k]) book[k] = new Map();
       if (!book[k].has(p.minutes)) {
         book[k].set(p.minutes, [s.open[i], s.high[i], s.low[i], s.close[i], s.oi[i]]);
@@ -164,18 +168,16 @@ async function fetchWindow(from, to, onProgress) {
   return days;
 }
 
-/** Calls per fetch window (1 NIFTY + CE/PE × offsets). */
-const CALLS_PER_WINDOW = 1 + OFFSETS.length * 2;
+function callsPerWindow(expiryCode) {
+  return 1 + offsetsFor(expiryCode).length * 2;
+}
 
-/**
- * Ensure every calendar date in [from, to] is in memory, fetching missing stretches from Dhan.
- * Today is fetched but never kept (session still running).
- */
-async function ensureDays(from, to, { onProgress } = {}) {
+async function ensureDays(from, to, { onProgress, expiryCode: expiryIn } = {}) {
+  const expiryCode = Number(expiryIn) === 2 ? 2 : 1;
   const today = getIstClock(new Date()).dateKey;
   const dates = [];
   for (let d = from; d <= to; d = addDays(d, 1)) dates.push(d);
-  const missing = dates.filter((d) => !memory.has(d) || d === today);
+  const missing = dates.filter((d) => !memory.has(memKey(d, expiryCode)) || d === today);
 
   const windows = [];
   for (const d of missing) {
@@ -188,7 +190,7 @@ async function ensureDays(from, to, { onProgress } = {}) {
     }
   }
 
-  const totalCalls = windows.length * CALLS_PER_WINDOW;
+  const totalCalls = windows.length * callsPerWindow(expiryCode);
   let doneCalls = 0;
   onProgress?.({ phase: 'fetch', done: 0, total: totalCalls });
   const live = new Map();
@@ -196,7 +198,7 @@ async function ensureDays(from, to, { onProgress } = {}) {
     const days = await fetchWindow(w.from, w.to, (k) => {
       doneCalls += k;
       onProgress?.({ phase: 'fetch', done: doneCalls, total: totalCalls, window: w });
-    });
+    }, expiryCode);
     for (let d = w.from; d <= w.to; d = addDays(d, 1)) {
       const data = days.get(d);
       const tradingDay = Boolean(data && data.nifty.m.length > 100);
@@ -204,17 +206,17 @@ async function ensureDays(from, to, { onProgress } = {}) {
         if (tradingDay) live.set(d, data);
         continue;
       }
-      remember(d, { tradingDay, payload: tradingDay ? pack(data) : null });
+      remember(d, expiryCode, { tradingDay, payload: tradingDay ? pack(data) : null });
     }
   }
   return live;
 }
 
-/** Load in-memory trading days in [from, to] (ascending). `live` overrides for today. */
-async function loadDays(from, to, live = new Map()) {
+async function loadDays(from, to, live = new Map(), { expiryCode: expiryIn } = {}) {
+  const expiryCode = Number(expiryIn) === 2 ? 2 : 1;
   const out = [];
   for (let d = from; d <= to; d = addDays(d, 1)) {
-    const entry = memory.get(d);
+    const entry = memory.get(memKey(d, expiryCode));
     if (entry?.tradingDay) out.push({ dateKey: d, ...unpack(entry.payload) });
   }
   for (const [dateKey, data] of live) {

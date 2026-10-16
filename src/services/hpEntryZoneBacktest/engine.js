@@ -1,61 +1,55 @@
 /**
- * High Probability Entry Zone — historical backtest (NIFTY 5-min or 15-min).
+ * High Probability Entry Zone — options backtest.
  *
- * Matches Pine "High Probability Entry Zone PRO":
- *   Signal on NIFTY TF (FVG + strong prior body + BOS inside the 3-candle pattern).
- *   ATM option is the fill only (BUY zone → CE · SELL → PE).
- *   Entry at the minute after the signal candle closes.
+ * Pine: "High Probability Entry Zone PRO - With Monthly Report"
+ *   Signal / SL / TP1 / TP2 planned on NIFTY TF (FVG Edge, swing 3/3, body 50%,
+ *   FVG 0.08×ATR, EMA100, session 09:15–15:15, Structure SL, rr1=1.5 / rr2=3.5).
  *
- * NIFTY SL (Structure mode) = min(low[1], low[2]) − buffer for CE /
- *                              max(high[1], high[2]) + buffer for PE
- *   (NOT the signal candle H/L). Exit only on later TF *close* through SL.
- *
- * Target: NIFTY entry ± risk × rr (default 2R), hit on NIFTY 1-min touch.
- * Same-minute conflict: SL wins (Pine conservative).
- * Overnight hold OK — no 15:15 day close · flip / max hold days.
+ * Fills & P/L: ATM CE (BUY) / PE (SELL) on Dhan *next* weekly (expiryCode 2).
+ *   50/50 scale: sell half at TP1 premium, half at TP2 / SL / BE / max-hold / range-end.
+ *   Never invent premiums — skip or mark open only with a real last print.
  */
 const { addDays, ensureDays, loadDays } = require('../oiCandleAgreeBacktest/dataSource');
 const { rangeChunks, chunkProgress } = require('../backtestChunks');
 const { getIstClock } = require('../../utils/dateTime');
 
-const HISTORY_START = '2020-08-03';
+const HISTORY_START = '2021-01-01';
+const DATA_START = '2020-08-03';
+const EXPIRY_CODE = 2; // next weekly
 const STEP = 50;
 const OPEN = 9 * 60 + 15;
 const LAST = 15 * 60 + 29;
-const WARMUP_DAYS = 5;
+const WARMUP_DAYS = 45;
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
 const DEFAULT_RULE = {
   timeframe: 15,
   lotSize: 65,
-  leftBars: 5,
-  rightBars: 5,
-  bodyRatio: 0.6,
-  /** Pine fvgMinAtr — skip tiny gaps. */
-  fvgMinAtr: 0.1,
+  leftBars: 3,
+  rightBars: 3,
+  bodyPct: 0.5,
+  fvgMinAtr: 0.08,
+  entryMode: 'FVG Edge', // Direct Close | FVG 50% Retest | FVG Edge
+  maxWaitBar: 15,
+  useTrend: true,
+  emaLen: 100,
   atrLen: 14,
-  /** Pine slBufAtr — Structure SL buffer in ATR units. */
-  slBufAtr: 0.1,
-  /** Pine maxRiskAtr — skip if entry→SL risk exceeds this × ATR. */
-  maxRiskAtr: 3,
-  entryFrom: OPEN + 5, // ~09:20 like Pine session start on 15m
-  entryTo: 15 * 60,
-  /** Session end for scanning bars (not a forced exit). */
-  eod: 15 * 60 + 15,
-  /** Skip when the NIFTY signal candle (high − low) is bigger than this. */
-  maxCandlePts: 120,
-  /** Always niftyRr for the live strategy guide (2R default). */
-  targetMode: 'niftyRr',
-  /** Fixed NIFTY target = entry ± risk × rr. Default 2R. */
-  rr: 2,
-  /** Max trading days to hold overnight (entry day = 1). */
-  maxHoldDays: 5,
+  slMode: 'Structure',
+  atrSlMult: 1.5,
+  slBufAtr: 0.05,
+  maxRiskAtr: 4.5,
+  rr1: 1.5,
+  rr2: 3.5,
+  sessFrom: OPEN,
+  sessTo: 15 * 60 + 15,
+  maxHoldDays: 10,
   slippage: 0,
-  /** Option pts above entry — recorded on the trade (table only). */
+  /** Option pts above entry — table tracking only (do not exit). */
   targets: [10, 20, 30, 40, 50],
 };
 
 const r2 = (n) => Number(Number(n).toFixed(2));
+const r4 = (n) => Number(Number(n).toFixed(4));
 const signedPts = (n) => `${n >= 0 ? '+' : ''}${r2(n)}`;
 const hhmm = (m) => `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
 const fmt = (n) => Number(n).toLocaleString('en-IN', { maximumFractionDigits: 2, minimumFractionDigits: 2 });
@@ -78,7 +72,6 @@ function minuteMap(series) {
   return out;
 }
 
-/** NIFTY `tf`-minute candles, in order: { dateKey, start, end, o, h, l, c }. */
 function buildCandles(days, tf) {
   const out = [];
   for (const day of days) {
@@ -100,24 +93,30 @@ function buildCandles(days, tf) {
   return out;
 }
 
-function annotateSignals(candles, { leftBars, rightBars, bodyRatio, fvgMinAtr = 0.1, atrLen = 14 }) {
+/** Exact PRO Monthly annotate (validBuy / validSell + FVG edges). */
+function annotate(candles, rule) {
+  const { leftBars, rightBars, bodyPct, fvgMinAtr, useTrend, emaLen, atrLen, sessFrom, sessTo } = rule;
   let lastPh = null;
   let lastPl = null;
-  let lastSignal = 0;
-  const trs = [];
+  let atr = null;
+  let ema = null;
+  let atrSeed = 0;
+  let atrCount = 0;
+  let emaSeed = 0;
+  let emaCount = 0;
+  const alpha = 2 / (emaLen + 1);
 
   return candles.map((c, i) => {
     const out = {
       ...c,
-      signal: 0,
+      atr: null,
+      ema: null,
       lastPh,
       lastPl,
-      strongBody: false,
-      bullishFvg: false,
-      bearishFvg: false,
-      atr: null,
-      structSlLong: null,
-      structSlShort: null,
+      recentHigh: null,
+      recentLow: null,
+      validBuy: false,
+      validSell: false,
     };
 
     const pivotAt = i - rightBars;
@@ -136,48 +135,66 @@ function annotateSignals(candles, { leftBars, rightBars, bodyRatio, fvgMinAtr = 
     out.lastPh = lastPh;
     out.lastPl = lastPl;
 
-    const prevClose = i > 0 ? candles[i - 1].c : c.c;
-    const tr = Math.max(c.h - c.l, Math.abs(c.h - prevClose), Math.abs(c.l - prevClose));
-    trs.push(tr);
-    const atr =
-      trs.length >= atrLen ? trs.slice(-atrLen).reduce((a, b) => a + b, 0) / atrLen : null;
-    out.atr = atr == null ? null : r2(atr);
+    if (i >= 10) {
+      let hi = -Infinity;
+      let lo = Infinity;
+      for (let j = i - 10; j <= i - 1; j += 1) {
+        hi = Math.max(hi, candles[j].h);
+        lo = Math.min(lo, candles[j].l);
+      }
+      out.recentHigh = hi;
+      out.recentLow = lo;
+    }
 
-    if (i < 2) return out;
+    const prevC = i > 0 ? candles[i - 1].c : c.c;
+    const tr = Math.max(c.h - c.l, Math.abs(c.h - prevC), Math.abs(c.l - prevC));
+    if (atrCount < atrLen) {
+      atrSeed += tr;
+      atrCount += 1;
+      if (atrCount === atrLen) atr = atrSeed / atrLen;
+    } else if (atr != null) {
+      atr = (atr * (atrLen - 1) + tr) / atrLen;
+    }
+    out.atr = atr == null ? null : r4(atr);
+
+    if (emaCount < emaLen) {
+      emaSeed += c.c;
+      emaCount += 1;
+      if (emaCount === emaLen) ema = emaSeed / emaLen;
+    } else if (ema != null) {
+      ema = alpha * c.c + (1 - alpha) * ema;
+    }
+    out.ema = ema == null ? null : r2(ema);
+
+    if (i < 2 || atr == null) return out;
 
     const prev = candles[i - 1];
     const older = candles[i - 2];
-    const range = c.h - c.l;
     const prevRange = prev.h - prev.l;
-    // Pine strongBody1 = body of candle[1] (prior bar)
-    const strongPrev = prevRange > 0 && Math.abs(prev.c - prev.o) > prevRange * bodyRatio;
-    out.strongBody = range > 0 && Math.abs(c.c - c.o) > range * bodyRatio;
+    const strongBody1 = prevRange > 0 && Math.abs(prev.c - prev.o) >= prevRange * bodyPct;
 
-    // Pine: FVG gap must be ≥ fvgMinAtr × ATR
     const gapUp = c.l - older.h;
     const gapDn = older.l - c.h;
-    const fvgOk = atr != null && atr > 0;
-    const bullishFvg = fvgOk && gapUp > 0 && prev.c > prev.o && gapUp >= fvgMinAtr * atr;
-    const bearishFvg = fvgOk && gapDn > 0 && prev.c < prev.o && gapDn >= fvgMinAtr * atr;
-    out.bullishFvg = bullishFvg;
-    out.bearishFvg = bearishFvg;
+    const bullFvg = gapUp > 0 && gapUp >= fvgMinAtr * atr;
+    const bearFvg = gapDn > 0 && gapDn >= fvgMinAtr * atr;
 
-    // Pine: BOS must happen inside the 3-candle pattern (close[2] still on other side)
-    const bosUp = lastPh != null && c.c > lastPh && older.c <= lastPh;
-    const bosDn = lastPl != null && c.c < lastPl && older.c >= lastPl;
+    const bosUp =
+      (lastPh != null && c.c > lastPh && prev.c <= lastPh) ||
+      (out.recentHigh != null && c.c > out.recentHigh && prev.c <= out.recentHigh);
+    const bosDn =
+      (lastPl != null && c.c < lastPl && prev.c >= lastPl) ||
+      (out.recentLow != null && c.c < out.recentLow && prev.c >= out.recentLow);
 
-    // Pine Structure SL = min(low[1], low[2]) / max(high[1], high[2])
-    out.structSlLong = r2(Math.min(prev.l, older.l));
-    out.structSlShort = r2(Math.max(prev.h, older.h));
+    const trendUp = !useTrend || (ema != null && c.c > ema);
+    const trendDn = !useTrend || (ema != null && c.c < ema);
+    const inSess = c.start >= sessFrom && c.start <= sessTo;
 
-    const buyZone = bullishFvg && strongPrev && bosUp;
-    const sellZone = bearishFvg && strongPrev && bosDn;
-    const finalBuy = buyZone && lastSignal !== 1;
-    const finalSell = sellZone && lastSignal !== -1;
-    if (finalBuy) lastSignal = 1;
-    if (finalSell) lastSignal = -1;
-    if (finalBuy && !finalSell) out.signal = 1;
-    else if (finalSell) out.signal = -1;
+    out.validBuy = bullFvg && strongBody1 && bosUp && trendUp && inSess;
+    out.validSell = bearFvg && strongBody1 && bosDn && trendDn && inSess;
+    out.fvgTopBull = c.l;
+    out.fvgBottomBull = older.h;
+    out.fvgBottomBear = c.h;
+    out.fvgTopBear = older.l;
     return out;
   });
 }
@@ -185,23 +202,26 @@ function annotateSignals(candles, { leftBars, rightBars, bodyRatio, fvgMinAtr = 
 function priceAt(book, minute, ahead = 5) {
   for (let m = minute; m <= Math.min(LAST, minute + ahead); m += 1) {
     const b = book.get(m);
-    if (b) return { min: m, price: b.o };
+    if (b && Number.isFinite(b.o)) return { min: m, price: b.o };
   }
   return null;
 }
 
-const EXIT_REASON = {
-  SL: 'Sold option · spot SL',
-  TARGET: 'Sold option · spot target',
-  FLIP: 'Sold option · flip',
-  TIME: 'Sold option · max hold',
-  OPEN: 'Still open (marked)',
-};
+function bookForDay(dayBooks, day, side, strike) {
+  const key = `${day.dateKey}-${side}-${strike}`;
+  if (!dayBooks.has(key)) dayBooks.set(key, minuteMap(day[side]?.[String(strike)]));
+  return dayBooks.get(key);
+}
 
-function exitReason(type, tf, rr) {
-  if (type === 'SL') return `Sold option · spot SL (${tf}-min close)`;
-  if (type === 'TARGET') return `Sold option · spot ${rr ?? 2}R`;
-  return EXIT_REASON[type] || type;
+/** First 1-min in candle where NIFTY touches level (long: L≤, short: H≥). */
+function firstTouchMin(nifty, candle, long, level, fromMin = null) {
+  const start = fromMin != null ? Math.max(candle.start, fromMin) : candle.start;
+  for (let m = start; m <= candle.end; m += 1) {
+    const b = nifty.get(m);
+    if (!b) continue;
+    if (long ? b.l <= level : b.h >= level) return m;
+  }
+  return null;
 }
 
 function summarize(trades) {
@@ -211,14 +231,22 @@ function summarize(trades) {
   const months = {};
   const years = {};
   const dayPnl = {};
-  const exits = { SL: 0, TARGET: 0, FLIP: 0, TIME: 0, OPEN: 0 };
+  const exits = { SL: 0, TP1: 0, TP2: 0, BE: 0, TIME: 0, OPEN: 0 };
   for (const t of trades) {
     equity += t.netPnL;
     peak = Math.max(peak, equity);
     maxDd = Math.max(maxDd, peak - equity);
     exits[t.exitType] = (exits[t.exitType] || 0) + 1;
     dayPnl[t.date] = (dayPnl[t.date] || 0) + t.netPnL;
-    if (!months[t.monthKey]) months[t.monthKey] = { key: t.monthKey, label: `${t.monthShort} ${t.monthKey.slice(2, 4)}`, trades: 0, wins: 0, pnl: 0 };
+    if (!months[t.monthKey]) {
+      months[t.monthKey] = {
+        key: t.monthKey,
+        label: `${t.monthShort} ${t.monthKey.slice(2, 4)}`,
+        trades: 0,
+        wins: 0,
+        pnl: 0,
+      };
+    }
     const m = months[t.monthKey];
     m.trades += 1;
     if (t.isWin) m.wins += 1;
@@ -238,6 +266,9 @@ function summarize(trades) {
     trades: trades.length,
     wins: wins.length,
     losses: trades.length - wins.length,
+    tp1Hits: trades.filter((t) => t.tp1Hit).length,
+    tp2Hits: trades.filter((t) => t.exitType === 'TP2').length,
+    beExits: trades.filter((t) => t.exitType === 'BE').length,
     netPnL: r2(equity),
     charges: r2(charges),
     avgCharges: trades.length ? r2(charges / trades.length) : 0,
@@ -253,436 +284,519 @@ function summarize(trades) {
   };
 }
 
-/**
- * @returns {{ taken: number, carry: object|null }}
- */
-function simulateDay({ day, dayCandles, nifty, rule, qty, lastMin, isToday, trades, skipped, carry }) {
-  const tf = rule.timeframe;
-  const tfLabel = `${tf}-min`;
-  const rr = rule.rr;
-  const books = new Map();
-  const bookFor = (side, strike) => {
-    const key = `${side}-${strike}`;
-    if (!books.has(key)) books.set(key, minuteMap(day[side]?.[String(strike)]));
-    return books.get(key);
-  };
-  const signalAt = new Map();
-  const candleCloseAt = new Map();
-  for (const c of dayCandles) {
-    candleCloseAt.set(c.end + 1, c);
-    if (c.signal) signalAt.set(c.end + 1, c);
-  }
-  const endMin = Math.min(LAST + 1, lastMin + 1);
-  const month = Number(day.dateKey.slice(5, 7));
-  let pos = carry || null;
-  let taken = 0;
+function simulate({ candles, dayByDate, rule, qty, rangeFrom, rangeTo, onProgress, skipped }) {
+  const {
+    entryMode,
+    maxWaitBar,
+    slMode,
+    atrSlMult,
+    slBufAtr,
+    maxRiskAtr,
+    rr1,
+    rr2,
+    maxHoldDays,
+    slippage,
+  } = rule;
 
-  if (pos) {
-    pos.book = bookFor(pos.side, pos.strike);
-    pos.holdDays = (pos.holdDays || 1) + 1;
-    pos.events.push({
-      time: `${day.dateKey} ${hhmm(OPEN)}`,
-      text: `Overnight hold → day ${pos.holdDays} · ${pos.strike} ${pos.side} · NIFTY target ${fmt(pos.targetSpot)} (${rr}R) · SL ${fmt(pos.stopSpot)}`,
-    });
-  }
+  const trades = [];
+  const dayBooks = new Map();
+  let pending = null;
+  let pos = null;
 
-  const open = (sc, side, m) => {
-    const skip = (reason) => {
-      skipped.push({ dateKey: day.dateKey, time: span(sc), side, reason });
-      return null;
-    };
-    const pe = side === 'PE';
-    const candlePts = r2(sc.h - sc.l);
-    if (candlePts > rule.maxCandlePts) {
-      return skip(`NIFTY candle ${candlePts} pts (max ${rule.maxCandlePts})`);
-    }
-
-    const spot = nifty.get(m)?.o;
-    if (!Number.isFinite(spot)) return skip(`no NIFTY bar at ${hhmm(m)}`);
-    const strike = Math.round(spot / STEP) * STEP;
-    const book = bookFor(side, strike);
-    const px = priceAt(book, m, 3);
-    if (!px) return skip(`no ${strike} ${side} price at ${hhmm(m)}`);
-
-    const entryPremium = r2(px.price + rule.slippage);
-    const entrySpot = r2(nifty.get(px.min)?.o ?? spot);
-    // Pine Structure SL: min(low[1], low[2]) / max(high[1], high[2]) ± ATR buffer
-    const buf = sc.atr != null ? rule.slBufAtr * sc.atr : 0;
-    const rawSl = pe ? sc.structSlShort : sc.structSlLong;
-    if (rawSl == null) return skip('missing structure SL levels');
-    const stopSpot = pe ? r2(rawSl + buf) : r2(rawSl - buf);
-    const riskPts = pe ? r2(stopSpot - entrySpot) : r2(entrySpot - stopSpot);
-    if (riskPts <= 0) {
-      return skip(
-        pe
-          ? `NIFTY ${fmt(entrySpot)} already at/above structure SL ${fmt(stopSpot)}`
-          : `NIFTY ${fmt(entrySpot)} already at/below structure SL ${fmt(stopSpot)}`,
-      );
-    }
-    if (sc.atr != null && riskPts > rule.maxRiskAtr * sc.atr) {
-      return skip(`risk ${riskPts} pts > max ${rule.maxRiskAtr}×ATR (${r2(rule.maxRiskAtr * sc.atr)})`);
-    }
-    const targetSpot = pe ? r2(entrySpot - riskPts * rr) : r2(entrySpot + riskPts * rr);
-    const bos = pe ? sc.lastPl : sc.lastPh;
-    const levels = (rule.targets || []).map((pts) => ({ pts, premium: r2(entryPremium + pts), hit: false, time: null }));
-
-    return {
-      sc,
-      side,
-      strike,
-      book,
-      candlePts,
-      entryDate: day.dateKey,
-      holdDays: 1,
-      startMin: px.min,
-      entryPremium,
-      entrySpot,
-      stopSpot,
-      targetSpot,
-      riskPts,
-      high: { px: entryPremium, min: px.min, date: day.dateKey },
-      low: { px: entryPremium, min: px.min, date: day.dateKey },
-      levels,
-      last: entryPremium,
-      events: [
-        {
-          time: hhmm(sc.end + 1),
-          text: pe
-            ? `SELL zone on ${span(sc)}: bearish FVG + strong body on prior bar + BOS inside pattern (close ${fmt(sc.c)} < swing L ${fmt(bos)}, candle[2] still ≥)`
-            : `BUY zone on ${span(sc)}: bullish FVG + strong body on prior bar + BOS inside pattern (close ${fmt(sc.c)} > swing H ${fmt(bos)}, candle[2] still ≤)`,
-        },
-        {
-          time: hhmm(sc.end + 1),
-          text: `NIFTY ${tfLabel} ${span(sc)} O ${fmt(sc.o)} H ${fmt(sc.h)} L ${fmt(sc.l)} C ${fmt(sc.c)} · size ${candlePts} pts · swing H ${fmt(sc.lastPh)} / L ${fmt(sc.lastPl)} · ATR ${sc.atr != null ? fmt(sc.atr) : '—'}`,
-        },
-        {
-          time: hhmm(px.min),
-          text: `Bought ${strike} ${side} at ₹${fmt(entryPremium)} · NIFTY ${fmt(entrySpot)} · Structure SL ${fmt(stopSpot)} (raw ${fmt(rawSl)} ± ${rule.slBufAtr}×ATR · ${tfLabel} close only) · NIFTY target ${fmt(targetSpot)} (${rr}R) · overnight hold OK · no day close`,
-        },
-      ],
-    };
+  const niftyOf = (dateKey) => {
+    const day = dayByDate.get(dateKey);
+    if (!day) return new Map();
+    if (!day._niftyMap) day._niftyMap = minuteMap(day.nifty);
+    return day._niftyMap;
   };
 
-  const markPath = (p, m, bar) => {
+  const bookOf = (dateKey, side, strike) => {
+    const day = dayByDate.get(dateKey);
+    if (!day) return new Map();
+    return bookForDay(dayBooks, day, side, strike);
+  };
+
+  const markPath = (p, dateKey, m, bar) => {
     if (!bar) return;
-    const hi = m === p.startMin && p.entryDate === day.dateKey ? Math.max(p.entryPremium, bar.h) : bar.h;
-    const lo = m === p.startMin && p.entryDate === day.dateKey ? Math.min(p.entryPremium, bar.l) : bar.l;
-    if (hi > p.high.px) p.high = { px: hi, min: m, date: day.dateKey };
-    if (lo < p.low.px) p.low = { px: lo, min: m, date: day.dateKey };
+    const sameEntry = dateKey === p.entryDate && m === p.startMin;
+    const hi = sameEntry ? Math.max(p.entryPremium, bar.h) : bar.h;
+    const lo = sameEntry ? Math.min(p.entryPremium, bar.l) : bar.l;
+    if (hi > p.high.px) p.high = { px: hi, min: m, date: dateKey };
+    if (lo < p.low.px) p.low = { px: lo, min: m, date: dateKey };
     for (const lv of p.levels) {
-      if (!lv.hit && hi >= lv.premium) Object.assign(lv, { hit: true, time: `${day.dateKey} ${hhmm(m)}` });
+      if (!lv.hit && hi >= lv.premium) Object.assign(lv, { hit: true, time: `${dateKey} ${hhmm(m)}` });
     }
-    p.last = bar.c;
+    p.last = { px: bar.c, min: m, date: dateKey };
   };
 
-  const close = (p, fill, min, type, text, exitSpotIn) => {
-    const exitPremium = r2(Math.max(0.05, (fill ? fill.price : p.last) - rule.slippage));
-    const exitMin = fill?.min ?? min;
-    if (exitPremium > p.high.px) p.high = { px: exitPremium, min: exitMin, date: day.dateKey };
-    if (exitPremium < p.low.px) p.low = { px: exitPremium, min: exitMin, date: day.dateKey };
-    for (const lv of p.levels) {
-      if (!lv.hit && exitPremium >= lv.premium) Object.assign(lv, { hit: true, time: `${day.dateKey} ${hhmm(exitMin)}` });
+  const markCandlePath = (p, c) => {
+    const book = bookOf(c.dateKey, p.side, p.strike);
+    const nifty = niftyOf(c.dateKey);
+    const from = p.entryDate === c.dateKey ? p.startMin : c.start;
+    for (let m = from; m <= c.end; m += 1) {
+      const b = book.get(m);
+      if (b) markPath(p, c.dateKey, m, b);
+      else if (nifty.has(m) && p.last) {
+        /* keep last print; no fake bars */
+      }
     }
-    const exitSpot = r2(exitSpotIn ?? nifty.get(exitMin)?.o ?? nifty.get(exitMin - 1)?.c ?? p.entrySpot);
-    const points = r2(exitPremium - p.entryPremium);
-    const grossPnL = r2(points * qty);
-    const charges = optionCharges(p.entryPremium * qty, exitPremium * qty);
+  };
+
+  const sellPx = (p, dateKey, minute) => {
+    const book = bookOf(dateKey, p.side, p.strike);
+    const fill = priceAt(book, minute, 3);
+    if (fill) return { min: fill.min, price: r2(Math.max(0.05, fill.price - slippage)), date: dateKey };
+    if (p.last?.px != null) {
+      return { min: minute, price: r2(Math.max(0.05, p.last.px - slippage)), date: dateKey, marked: true };
+    }
+    return null;
+  };
+
+  const finish = (p, exitFill, exitType, exitSpot, text) => {
+    const halfQty = Math.floor(qty / 2);
+    const restQty = qty - (p.tp1Hit ? halfQty : 0);
+    const soldAtTp1 = p.tp1Hit && p.tp1ExitPremium != null;
+
+    let grossPnL = 0;
+    let charges = 0;
+    let exitPremium;
+    let points;
+
+    if (soldAtTp1) {
+      const g1 = r2((p.tp1ExitPremium - p.entryPremium) * halfQty);
+      const g2 = r2((exitFill.price - p.entryPremium) * restQty);
+      grossPnL = r2(g1 + g2);
+      charges = r2(
+        optionCharges(p.entryPremium * halfQty, p.tp1ExitPremium * halfQty) +
+          optionCharges(p.entryPremium * restQty, exitFill.price * restQty),
+      );
+      // Weighted avg exit premium for display
+      exitPremium = r2((p.tp1ExitPremium * halfQty + exitFill.price * restQty) / qty);
+      points = r2(grossPnL / qty);
+    } else {
+      exitPremium = exitFill.price;
+      points = r2(exitPremium - p.entryPremium);
+      grossPnL = r2(points * qty);
+      charges = optionCharges(p.entryPremium * qty, exitPremium * qty);
+    }
+
     const netPnL = r2(grossPnL - charges);
     const highPx = r2(p.high.px);
     const lowPx = r2(p.low.px);
-    const maxGainPts = r2(highPx - p.entryPremium);
-    const maxDropPts = r2(lowPx - p.entryPremium);
-    const entryMonth = Number(p.entryDate.slice(5, 7));
+    const exitMin = exitFill.min;
+    const exitDate = exitFill.date;
+
+    if (exitPremium > highPx) p.high = { px: exitPremium, min: exitMin, date: exitDate };
+    if (exitPremium < lowPx) p.low = { px: exitPremium, min: exitMin, date: exitDate };
+
     p.events.push({
-      time: `${day.dateKey} ${hhmm(exitMin)}`,
-      text: `${text} → sold ${p.strike} ${p.side} at ₹${fmt(exitPremium)} · ${points >= 0 ? '+' : ''}${points} pts · NIFTY ${fmt(exitSpot)} · held ${p.holdDays}d`,
+      time: `${exitDate} ${hhmm(exitMin)}`,
+      text: `${text} → sold ${soldAtTp1 ? `remaining ${restQty}` : `${qty}`} × ${p.strike} ${p.side} at ₹${fmt(exitFill.price)}${exitFill.marked ? ' (last print)' : ''} · NIFTY ${fmt(exitSpot)}`,
     });
     p.events.push({
-      time: `${day.dateKey} ${hhmm(exitMin)}`,
-      text: `Option path: high ₹${fmt(highPx)} (${signedPts(maxGainPts)}) · low ₹${fmt(lowPx)} (${signedPts(maxDropPts)}) · NIFTY target ${fmt(p.targetSpot)} (${rr}R) · levels ${(p.levels || []).map((l) => `+${l.pts}${l.hit ? ` ${l.time}` : ' no'}`).join(' · ') || 'none'}`,
+      time: `${exitDate} ${hhmm(exitMin)}`,
+      text: `Option path: high ₹${fmt(highPx)} (${signedPts(highPx - p.entryPremium)}) · low ₹${fmt(lowPx)} (${signedPts(lowPx - p.entryPremium)})${soldAtTp1 ? ` · TP1 half @ ₹${fmt(p.tp1ExitPremium)}` : ''}`,
     });
+
     const sc = p.sc;
+    const entryMonth = Number(p.entryDate.slice(5, 7));
     trades.push({
       id: `${p.entryDate}-${hhmm(p.startMin)}-${p.side}-${p.strike}`,
       date: p.entryDate,
-      exitDate: day.dateKey,
+      exitDate,
       holdDays: p.holdDays,
       monthKey: p.entryDate.slice(0, 7),
       monthShort: MONTHS[entryMonth - 1],
       side: p.side,
       strike: p.strike,
-      signal: sc.signal,
       signalTime: span(sc),
       signalCandle: { o: r2(sc.o), h: r2(sc.h), l: r2(sc.l), c: r2(sc.c) },
       lastPh: sc.lastPh == null ? null : r2(sc.lastPh),
       lastPl: sc.lastPl == null ? null : r2(sc.lastPl),
-      bullishFvg: Boolean(sc.bullishFvg),
-      bearishFvg: Boolean(sc.bearishFvg),
-      candlePts: p.candlePts,
-      stopSpot: p.stopSpot,
-      targetSpot: p.targetSpot,
-      riskPts: p.riskPts,
-      rr,
-      stop: p.stopSpot,
+      entryMode,
       entryTime: hhmm(p.startMin),
       entrySpot: p.entrySpot,
       entryPremium: p.entryPremium,
+      niftyEntry: p.niftyEntry,
+      stopSpot: p.stopInit,
+      stop: p.stopInit,
+      tp1: p.tp1,
+      tp2: p.tp2,
+      targetSpot: p.tp2,
+      riskPts: p.initRisk,
+      rr1,
+      rr2,
+      rr: rr2,
+      tp1Hit: Boolean(p.tp1Hit),
+      tp1ExitPremium: p.tp1ExitPremium ?? null,
+      tp1ExitTime: p.tp1ExitTime ?? null,
       targetLevels: p.levels.map((l) => ({ ...l, premium: r2(l.premium) })),
-      highAfterEntry: highPx,
+      highAfterEntry: r2(p.high.px),
       highAfterTime: `${p.high.date || p.entryDate} ${hhmm(p.high.min)}`,
-      maxGainPts,
-      lowAfterEntry: lowPx,
+      maxGainPts: r2(p.high.px - p.entryPremium),
+      lowAfterEntry: r2(p.low.px),
       lowAfterTime: `${p.low.date || p.entryDate} ${hhmm(p.low.min)}`,
-      maxDropPts,
-      peakPremium: highPx,
-      lowPremium: lowPx,
+      maxDropPts: r2(p.low.px - p.entryPremium),
+      peakPremium: r2(p.high.px),
+      lowPremium: r2(p.low.px),
       exitTime: hhmm(exitMin),
-      exitSpot,
+      exitSpot: r2(exitSpot),
       niftyPts: r2(p.side === 'CE' ? exitSpot - p.entrySpot : p.entrySpot - exitSpot),
       exitPremium,
-      exitType: type,
-      exitReason: exitReason(type, tf, rr),
-      timeframe: tf,
-      points,
-      grossPnL,
-      charges,
-      netPnL,
-      isWin: netPnL > 0,
-      events: p.events,
-    });
-  };
-
-  // Force exit if max overnight hold reached at open
-  if (pos && pos.holdDays > rule.maxHoldDays) {
-    const fill = priceAt(pos.book, OPEN, 10) || (pos.last != null ? { min: OPEN, price: pos.last } : null);
-    close(pos, fill, OPEN, 'TIME', `Max hold ${rule.maxHoldDays} trading days — force exit at open`);
-    pos = null;
-  }
-
-  for (let m = OPEN; m < endMin; m += 1) {
-    const sc = signalAt.get(m);
-    if (sc) {
-      const side = sc.signal > 0 ? 'CE' : 'PE';
-      if (pos) {
-        const flipLabel = side === 'CE' ? 'BUY zone' : 'SELL zone';
-        close(pos, priceAt(pos.book, m), m, 'FLIP', `Opposite ${flipLabel} on ${span(sc)}`);
-        pos = null;
-      }
-      if (m >= rule.entryFrom && m <= rule.entryTo) {
-        pos = open(sc, side, m);
-        if (pos) taken += 1;
-      }
-    }
-    if (!pos) continue;
-    if (pos.entryDate === day.dateKey && m < pos.startMin) continue;
-
-    const b = pos.book.get(m);
-    if (b) markPath(pos, m, b);
-
-    const nBar = nifty.get(m);
-    const pe = pos.side === 'PE';
-
-    // Pine conservative: if SL and target conflict on the same bar, SL wins first
-    const closed = candleCloseAt.get(m);
-    if (closed && !(pos.entryDate === day.dateKey && closed.start === pos.sc.start)) {
-      const slClose = pe ? closed.c >= pos.stopSpot : closed.c <= pos.stopSpot;
-      if (slClose) {
-        const fill = priceAt(pos.book, m, 0) || (b ? { min: m, price: b.o } : null) || priceAt(pos.book, m, 3);
-        close(
-          pos,
-          fill,
-          m,
-          'SL',
-          `NIFTY ${tfLabel} ${span(closed)} closed at ${fmt(closed.c)} ${pe ? '≥' : '≤'} Structure SL ${fmt(pos.stopSpot)} (wick alone does not cut · SL before target)`,
-          r2(closed.c),
-        );
-        pos = null;
-        continue;
-      }
-    }
-
-    // Fixed NIFTY R-target — 1-min touch
-    if (nBar && pos.targetSpot != null) {
-      const hit = pe ? nBar.l <= pos.targetSpot : nBar.h >= pos.targetSpot;
-      if (hit) {
-        const fill = priceAt(pos.book, m, 0) || (b ? { min: m, price: b.o } : null) || priceAt(pos.book, m, 3);
-        close(
-          pos,
-          fill,
-          m,
-          'TARGET',
-          `NIFTY touched target ${fmt(pos.targetSpot)} (${rr}R) at ${hhmm(m)} (spot H ${fmt(nBar.h)} / L ${fmt(nBar.l)})`,
-          pe ? Math.min(nBar.l, pos.targetSpot) : Math.max(nBar.h, pos.targetSpot),
-        );
-        pos = null;
-      }
-    }
-  }
-
-  // No day close — carry overnight (mark OPEN only if this is live today past scan)
-  if (pos && isToday && lastMin + 1 < rule.eod) {
-    close(pos, null, lastMin, 'OPEN', `Trade still open — marked at the ${hhmm(lastMin)} price`);
-    return { taken, carry: null };
-  }
-  return { taken, carry: pos };
-}
-
-/**
- * @param {{ from: string, to: string, lots?: number, rule?: Partial<typeof DEFAULT_RULE>, onProgress?: Function, onPartial?: Function }} opts
- */
-async function runBacktest({ from, to, lots = 10, rule: ruleIn = {}, onProgress, onPartial } = {}) {
-  const timeframe = Number(ruleIn.timeframe) === 5 ? 5 : 15;
-  const rr = Math.min(10, Math.max(0.5, Number(ruleIn.rr) || DEFAULT_RULE.rr));
-  const maxHoldDays = Math.min(20, Math.max(1, Math.round(Number(ruleIn.maxHoldDays) || DEFAULT_RULE.maxHoldDays)));
-  const fvgMinAtr = Math.min(1, Math.max(0, Number(ruleIn.fvgMinAtr) || DEFAULT_RULE.fvgMinAtr));
-  const atrLen = Math.min(50, Math.max(5, Math.round(Number(ruleIn.atrLen) || DEFAULT_RULE.atrLen)));
-  const slBufAtr = Math.min(1, Math.max(0, Number(ruleIn.slBufAtr) || DEFAULT_RULE.slBufAtr));
-  const maxRiskAtr = Math.min(10, Math.max(0.5, Number(ruleIn.maxRiskAtr) || DEFAULT_RULE.maxRiskAtr));
-  const rule = {
-    ...DEFAULT_RULE,
-    ...ruleIn,
-    timeframe,
-    rr,
-    maxHoldDays,
-    fvgMinAtr,
-    atrLen,
-    slBufAtr,
-    maxRiskAtr,
-    targetMode: 'niftyRr',
-    // Default entry window ~09:20–15:00 (Pine session); allow override
-    entryFrom: Number.isFinite(ruleIn.entryFrom) ? ruleIn.entryFrom : OPEN + 5,
-  };
-  const lotCount = Math.max(1, Math.round(lots));
-  const qty = lotCount * rule.lotSize;
-  const trades = [];
-  const flatDays = [];
-  const skippedSignals = [];
-  let tradingDays = 0;
-  let carry = null;
-
-  const build = (doneThrough) => ({
-    from,
-    to,
-    lots: lotCount,
-    qty,
-    rule: {
-      ...rule,
-      entryFrom: hhmm(rule.entryFrom),
-      entryTo: hhmm(rule.entryTo),
-      eod: hhmm(rule.eod),
-      overnight: true,
-      dayClose: false,
-    },
-    tradingDays,
-    flatDays: [...flatDays],
-    skippedSignals: [...skippedSignals],
-    summary: summarize(trades),
-    trades: [...trades],
-    ...(doneThrough ? { doneThrough } : {}),
-  });
-
-  const chunks = rangeChunks(from, to, { warmupDays: WARMUP_DAYS });
-  for (const [ci, chunk] of chunks.entries()) {
-    const report = chunkProgress(onProgress, ci, chunks.length, chunk.label, () => ({ tradesSoFar: trades.length }));
-    const fetchFrom = addDays(chunk.from, -WARMUP_DAYS);
-    const live = await ensureDays(fetchFrom, chunk.to, { onProgress: report });
-    const days = (await loadDays(fetchFrom, chunk.to, live)).filter((d) => d.dateKey <= chunk.to);
-    const now = getIstClock(new Date());
-    const closed = buildCandles(days, rule.timeframe).filter((c) => c.dateKey !== now.dateKey || c.end + 1 <= now.minutes);
-    const candles = annotateSignals(closed, rule);
-    const byDay = new Map();
-    for (const c of candles) {
-      if (!byDay.has(c.dateKey)) byDay.set(c.dateKey, []);
-      byDay.get(c.dateKey).push(c);
-    }
-
-    const simDays = days.filter((d) => d.dateKey >= chunk.from);
-    simDays.forEach((day, di) => {
-      report({ phase: 'simulate', done: di, total: simDays.length, dateKey: day.dateKey });
-      const isToday = day.dateKey === getIstClock(new Date()).dateKey;
-      const lastMin = Math.max(...day.nifty.m.filter((m) => m <= LAST && (!isToday || m < now.minutes)), OPEN);
-      const { taken, carry: next } = simulateDay({
-        day,
-        dayCandles: byDay.get(day.dateKey) || [],
-        nifty: minuteMap(day.nifty),
-        rule,
-        qty,
-        lastMin,
-        isToday,
-        trades,
-        skipped: skippedSignals,
-        carry,
-      });
-      carry = next;
-      if (!taken && !carry) flatDays.push(day.dateKey);
-    });
-    tradingDays += simDays.length;
-    onPartial?.(build(chunk.to));
-  }
-
-  // End of range — mark any still-open overnight position
-  if (carry) {
-    const dayKey = carry.entryDate;
-    const month = Number(dayKey.slice(5, 7));
-    const exitPremium = r2(Math.max(0.05, carry.last - rule.slippage));
-    const points = r2(exitPremium - carry.entryPremium);
-    const grossPnL = r2(points * qty);
-    const charges = optionCharges(carry.entryPremium * qty, exitPremium * qty);
-    const netPnL = r2(grossPnL - charges);
-    const highPx = r2(carry.high.px);
-    const lowPx = r2(carry.low.px);
-    carry.events.push({ time: to, text: `Range end — still open, marked at ₹${fmt(exitPremium)}` });
-    trades.push({
-      id: `${carry.entryDate}-${hhmm(carry.startMin)}-${carry.side}-${carry.strike}`,
-      date: carry.entryDate,
-      exitDate: to,
-      holdDays: carry.holdDays,
-      monthKey: carry.entryDate.slice(0, 7),
-      monthShort: MONTHS[month - 1],
-      side: carry.side,
-      strike: carry.strike,
-      signal: carry.sc.signal,
-      signalTime: span(carry.sc),
-      signalCandle: { o: r2(carry.sc.o), h: r2(carry.sc.h), l: r2(carry.sc.l), c: r2(carry.sc.c) },
-      lastPh: carry.sc.lastPh == null ? null : r2(carry.sc.lastPh),
-      lastPl: carry.sc.lastPl == null ? null : r2(carry.sc.lastPl),
-      bullishFvg: Boolean(carry.sc.bullishFvg),
-      bearishFvg: Boolean(carry.sc.bearishFvg),
-      candlePts: carry.candlePts,
-      stopSpot: carry.stopSpot,
-      targetSpot: carry.targetSpot,
-      riskPts: carry.riskPts,
-      rr: rule.rr,
-      stop: carry.stopSpot,
-      entryTime: hhmm(carry.startMin),
-      entrySpot: carry.entrySpot,
-      entryPremium: carry.entryPremium,
-      targetLevels: carry.levels.map((l) => ({ ...l, premium: r2(l.premium) })),
-      highAfterEntry: highPx,
-      highAfterTime: `${carry.high.date || carry.entryDate} ${hhmm(carry.high.min)}`,
-      maxGainPts: r2(highPx - carry.entryPremium),
-      lowAfterEntry: lowPx,
-      lowAfterTime: `${carry.low.date || carry.entryDate} ${hhmm(carry.low.min)}`,
-      maxDropPts: r2(lowPx - carry.entryPremium),
-      peakPremium: highPx,
-      lowPremium: lowPx,
-      exitTime: 'EOD',
-      exitSpot: carry.entrySpot,
-      niftyPts: 0,
-      exitPremium,
-      exitType: 'OPEN',
-      exitReason: EXIT_REASON.OPEN,
+      exitType,
+      exitReason:
+        exitType === 'TP2'
+          ? `Sold option · TP2 ${rr2}R (50% after TP1 ${rr1}R)`
+          : exitType === 'TP1'
+            ? `Sold option · TP1 ${rr1}R only`
+            : exitType === 'BE'
+              ? 'Sold option · BE after TP1 (NIFTY SL @ entry)'
+              : exitType === 'SL'
+                ? 'Sold option · spot Structure SL'
+                : exitType === 'TIME'
+                  ? `Sold option · max hold ${maxHoldDays}d`
+                  : 'Still open (marked at last print)',
       timeframe: rule.timeframe,
       points,
       grossPnL,
       charges,
       netPnL,
       isWin: netPnL > 0,
-      events: carry.events,
+      events: p.events,
+      expiryLabel: 'next weekly',
     });
+  };
+
+  const tryOpen = (pendingSetup, fillCandle, fillMin) => {
+    const long = pendingSetup.dir === 1;
+    const side = long ? 'CE' : 'PE';
+    const nifty = niftyOf(fillCandle.dateKey);
+    const spotBar = nifty.get(fillMin) || nifty.get(fillMin - 1);
+    if (!spotBar || !Number.isFinite(spotBar.o)) {
+      skipped.push({
+        dateKey: fillCandle.dateKey,
+        time: span(pendingSetup.sc),
+        side,
+        reason: `no NIFTY bar at ${hhmm(fillMin)}`,
+      });
+      return null;
+    }
+    const strike = Math.round(spotBar.o / STEP) * STEP;
+    const book = bookOf(fillCandle.dateKey, side, strike);
+    const px = priceAt(book, fillMin, 3);
+    if (!px) {
+      skipped.push({
+        dateKey: fillCandle.dateKey,
+        time: span(pendingSetup.sc),
+        side,
+        reason: `no ${strike} ${side} next-week premium at ${hhmm(fillMin)}`,
+      });
+      return null;
+    }
+    const entryPremium = r2(px.price + slippage);
+    const entrySpot = r2(nifty.get(px.min)?.o ?? spotBar.o);
+    const niftyEntry = pendingSetup.targetEntry;
+    const stopInit = pendingSetup.sl;
+    const risk = Math.abs(niftyEntry - stopInit);
+    const levels = (rule.targets || []).map((pts) => ({
+      pts,
+      premium: r2(entryPremium + pts),
+      hit: false,
+      time: null,
+    }));
+
+    return {
+      sc: pendingSetup.sc,
+      side,
+      strike,
+      entryDate: fillCandle.dateKey,
+      entryIdx: pendingSetup.setupIdx,
+      startMin: px.min,
+      entryPremium,
+      entrySpot,
+      niftyEntry,
+      stopInit,
+      curSl: stopInit,
+      initRisk: risk,
+      tp1: long ? niftyEntry + risk * rr1 : niftyEntry - risk * rr1,
+      tp2: long ? niftyEntry + risk * rr2 : niftyEntry - risk * rr2,
+      tp1Hit: false,
+      tp1ExitPremium: null,
+      tp1ExitTime: null,
+      tp1ExitMin: null,
+      holdDays: 1,
+      lastDate: fillCandle.dateKey,
+      high: { px: entryPremium, min: px.min, date: fillCandle.dateKey },
+      low: { px: entryPremium, min: px.min, date: fillCandle.dateKey },
+      last: { px: entryPremium, min: px.min, date: fillCandle.dateKey },
+      levels,
+      events: [
+        {
+          time: hhmm(pendingSetup.sc.start),
+          text: long
+            ? `BUY setup ${span(pendingSetup.sc)} · ${entryMode} · target ${fmt(niftyEntry)} · Structure SL ${fmt(stopInit)} · TP1 ${fmt(niftyEntry + risk * rr1)} (${rr1}R) · TP2 ${fmt(niftyEntry + risk * rr2)} (${rr2}R)`
+            : `SELL setup ${span(pendingSetup.sc)} · ${entryMode} · target ${fmt(niftyEntry)} · Structure SL ${fmt(stopInit)} · TP1 ${fmt(niftyEntry - risk * rr1)} (${rr1}R) · TP2 ${fmt(niftyEntry - risk * rr2)} (${rr2}R)`,
+        },
+        {
+          time: hhmm(px.min),
+          text: `Bought ${strike} ${side} (next weekly) at ₹${fmt(entryPremium)} · NIFTY ${fmt(entrySpot)} · 50/50 scale at TP1 then TP2/BE/SL`,
+        },
+      ],
+    };
+  };
+
+  for (let i = 0; i < candles.length; i += 1) {
+    if (i % 200 === 0) onProgress?.({ phase: 'simulate', done: i, total: candles.length });
+    const c = candles[i];
+    const atr = c.atr;
+    const buf = atr != null ? slBufAtr * atr : 0;
+    const nifty = niftyOf(c.dateKey);
+    const inRange = c.dateKey >= rangeFrom && c.dateKey <= rangeTo;
+
+    // --- manage open trade (bars after entry) ---
+    if (pos && i > pos.entryIdx) {
+      if (c.dateKey !== pos.lastDate) {
+        pos.holdDays += 1;
+        pos.lastDate = c.dateKey;
+        pos.events.push({
+          time: `${c.dateKey} ${hhmm(OPEN)}`,
+          text: `Overnight hold → day ${pos.holdDays} · ${pos.strike} ${pos.side}`,
+        });
+      }
+      markCandlePath(pos, c);
+
+      if (pos.holdDays > maxHoldDays) {
+        const fill = sellPx(pos, c.dateKey, c.start) || sellPx(pos, c.dateKey, OPEN);
+        if (fill) {
+          finish(pos, fill, 'TIME', nifty.get(fill.min)?.o ?? pos.entrySpot, `Max hold ${maxHoldDays} trading days`);
+          pos = null;
+        }
+      } else {
+        const long = pos.side === 'CE';
+        const slHit = long ? c.l <= pos.curSl : c.h >= pos.curSl;
+        const t1Hit = long ? c.h >= pos.tp1 : c.l <= pos.tp1;
+        const t2Hit = long ? c.h >= pos.tp2 : c.l <= pos.tp2;
+
+        if (slHit) {
+          const m = firstTouchMin(nifty, c, !long, pos.curSl) ?? c.start;
+          const fill = sellPx(pos, c.dateKey, m);
+          if (fill) {
+            const exitSpot = r2(nifty.get(fill.min)?.[long ? 'l' : 'h'] ?? pos.curSl);
+            finish(pos, fill, pos.tp1Hit ? 'BE' : 'SL', exitSpot, pos.tp1Hit
+              ? `NIFTY touched BE SL ${fmt(pos.curSl)} after TP1`
+              : `NIFTY touched Structure SL ${fmt(pos.curSl)}`);
+            pos = null;
+          }
+        } else {
+          if (!pos.tp1Hit && t1Hit) {
+            const m = firstTouchMin(nifty, c, long, pos.tp1) ?? c.start;
+            const fill = sellPx(pos, c.dateKey, m);
+            if (fill) {
+              pos.tp1Hit = true;
+              pos.tp1ExitPremium = fill.price;
+              pos.tp1ExitMin = fill.min;
+              pos.tp1ExitDate = c.dateKey;
+              pos.tp1ExitTime = `${c.dateKey} ${hhmm(fill.min)}`;
+              pos.curSl = pos.niftyEntry;
+              pos.events.push({
+                time: pos.tp1ExitTime,
+                text: `TP1 ${rr1}R hit · sold 50% at ₹${fmt(fill.price)} · NIFTY SL → BE ${fmt(pos.niftyEntry)}`,
+              });
+            }
+          }
+          if (pos && pos.tp1Hit && t2Hit) {
+            const from =
+              pos.tp1ExitDate === c.dateKey && pos.tp1ExitMin != null ? pos.tp1ExitMin : c.start;
+            const m = firstTouchMin(nifty, c, long, pos.tp2, from) ?? firstTouchMin(nifty, c, long, pos.tp2) ?? c.end;
+            const fill = sellPx(pos, c.dateKey, m);
+            if (fill) {
+              const exitSpot = r2(nifty.get(fill.min)?.[long ? 'h' : 'l'] ?? pos.tp2);
+              finish(pos, fill, 'TP2', exitSpot, `NIFTY touched TP2 ${fmt(pos.tp2)} (${rr2}R)`);
+              pos = null;
+            }
+          }
+        }
+      }
+    }
+
+    // --- pending timeout / invalidate ---
+    if (pending) {
+      if (i - pending.setupIdx > maxWaitBar) pending = null;
+      else if (pending.dir === 1 && c.l <= pending.sl) pending = null;
+      else if (pending.dir === -1 && c.h >= pending.sl) pending = null;
+    }
+
+    // --- new setup (only count entries inside requested range) ---
+    if (!pending && !pos && atr != null && inRange) {
+      if (c.validBuy) {
+        const calculatedSl =
+          slMode === 'Structure' ? Math.min(candles[i - 1].l, candles[i - 2].l) - buf : c.c - atrSlMult * atr;
+        const fvgTop = c.fvgTopBull;
+        const fvgBottom = c.fvgBottomBull;
+        const targetPrice =
+          entryMode === 'Direct Close' ? c.c : entryMode === 'FVG Edge' ? fvgTop : (fvgTop + fvgBottom) / 2;
+        const risk = targetPrice - calculatedSl;
+        if (risk > 0 && risk <= maxRiskAtr * atr) {
+          pending = { dir: 1, targetEntry: r2(targetPrice), sl: r2(calculatedSl), setupIdx: i, sc: c };
+        }
+      } else if (c.validSell) {
+        const calculatedSl =
+          slMode === 'Structure' ? Math.max(candles[i - 1].h, candles[i - 2].h) + buf : c.c + atrSlMult * atr;
+        const fvgBottom = c.fvgBottomBear;
+        const fvgTop = c.fvgTopBear;
+        const targetPrice =
+          entryMode === 'Direct Close' ? c.c : entryMode === 'FVG Edge' ? fvgBottom : (fvgTop + fvgBottom) / 2;
+        const risk = calculatedSl - targetPrice;
+        if (risk > 0 && risk <= maxRiskAtr * atr) {
+          pending = { dir: -1, targetEntry: r2(targetPrice), sl: r2(calculatedSl), setupIdx: i, sc: c };
+        }
+      }
+    }
+
+    // --- trigger fill ---
+    if (pending && !pos && inRange) {
+      const buyTrigger = pending.dir === 1 && (entryMode === 'Direct Close' || c.l <= pending.targetEntry);
+      const sellTrigger = pending.dir === -1 && (entryMode === 'Direct Close' || c.h >= pending.targetEntry);
+      if (buyTrigger || sellTrigger) {
+        let fillMin;
+        if (entryMode === 'Direct Close' && i === pending.setupIdx) {
+          fillMin = Math.min(LAST, c.end + 1);
+        } else {
+          fillMin =
+            firstTouchMin(nifty, c, pending.dir === 1, pending.targetEntry) ??
+            (entryMode === 'Direct Close' ? Math.min(LAST, c.end + 1) : null);
+        }
+        if (fillMin != null) {
+          const opened = tryOpen(pending, c, fillMin);
+          if (opened) {
+            opened.entryIdx = i;
+            pos = opened;
+            // mark path on remainder of entry candle
+            markCandlePath(pos, c);
+          }
+          pending = null;
+        }
+      }
+    }
   }
 
+  // Range end — mark open with last real print only
+  if (pos && pos.last?.px != null) {
+    finish(
+      pos,
+      { min: pos.last.min, price: r2(Math.max(0.05, pos.last.px - slippage)), date: pos.last.date, marked: true },
+      'OPEN',
+      pos.entrySpot,
+      'Range end — still open, marked at last option print',
+    );
+    pos = null;
+  }
+
+  return trades.filter((t) => t.date >= rangeFrom && t.date <= rangeTo);
+}
+
+async function runBacktest({ from, to, lots = 10, rule: ruleIn = {}, onProgress, onPartial } = {}) {
+  const today = getIstClock(new Date()).dateKey;
+  const timeframe = Number(ruleIn.timeframe) === 5 ? 5 : 15;
+  const rule = {
+    ...DEFAULT_RULE,
+    ...ruleIn,
+    timeframe,
+    leftBars: Math.min(10, Math.max(2, Math.round(Number(ruleIn.leftBars) || DEFAULT_RULE.leftBars))),
+    rightBars: Math.min(10, Math.max(1, Math.round(Number(ruleIn.rightBars) || DEFAULT_RULE.rightBars))),
+    bodyPct: Math.min(0.95, Math.max(0.3, Number(ruleIn.bodyPct) || DEFAULT_RULE.bodyPct)),
+    fvgMinAtr: Math.min(1, Math.max(0, Number(ruleIn.fvgMinAtr) || DEFAULT_RULE.fvgMinAtr)),
+    entryMode: ['Direct Close', 'FVG 50% Retest', 'FVG Edge'].includes(ruleIn.entryMode)
+      ? ruleIn.entryMode
+      : DEFAULT_RULE.entryMode,
+    maxWaitBar: Math.min(30, Math.max(3, Math.round(Number(ruleIn.maxWaitBar) || DEFAULT_RULE.maxWaitBar))),
+    emaLen: Math.min(300, Math.max(20, Math.round(Number(ruleIn.emaLen) || DEFAULT_RULE.emaLen))),
+    rr1: Math.min(10, Math.max(0.25, Number(ruleIn.rr1) || DEFAULT_RULE.rr1)),
+    rr2: Math.min(20, Math.max(0.5, Number(ruleIn.rr2) || DEFAULT_RULE.rr2)),
+    maxRiskAtr: Math.min(10, Math.max(0.5, Number(ruleIn.maxRiskAtr) || DEFAULT_RULE.maxRiskAtr)),
+    slBufAtr: Math.min(1, Math.max(0, Number(ruleIn.slBufAtr) || DEFAULT_RULE.slBufAtr)),
+    maxHoldDays: Math.min(20, Math.max(1, Math.round(Number(ruleIn.maxHoldDays) || DEFAULT_RULE.maxHoldDays))),
+    slippage: Math.min(5, Math.max(0, Number(ruleIn.slippage) || 0)),
+    useTrend: ruleIn.useTrend !== false,
+    targets: Array.isArray(ruleIn.targets)
+      ? [...new Set(ruleIn.targets.map(Number).filter((n) => n >= 1 && n <= 1000))].sort((a, b) => a - b).slice(0, 10)
+      : DEFAULT_RULE.targets,
+  };
+
+  const rangeFrom = from < HISTORY_START ? HISTORY_START : from;
+  const rangeTo = to > today ? today : to;
+  const lotCount = Math.max(1, Math.round(lots));
+  const qty = lotCount * rule.lotSize;
+  const allTrades = [];
+  const skippedSignals = [];
+  const flatDays = [];
+  let tradingDays = 0;
+
+  const build = (doneThrough) => ({
+    from: rangeFrom,
+    to: rangeTo,
+    lots: lotCount,
+    qty,
+    rule: {
+      ...rule,
+      session: '0915-1515',
+      expiryCode: EXPIRY_CODE,
+      expiryLabel: 'next weekly',
+      scaleOut: '50/50 TP1 then TP2',
+      overnight: true,
+      dayClose: false,
+    },
+    tradingDays,
+    flatDays: [...flatDays],
+    skippedSignals: [...skippedSignals],
+    summary: summarize(allTrades),
+    trades: [...allTrades],
+    ...(doneThrough ? { doneThrough } : {}),
+  });
+
+  // Fetch in chunks for progress; simulate once over the full loaded range so
+  // pending / overnight positions never reset at chunk boundaries.
+  let fetchFrom = addDays(rangeFrom, -WARMUP_DAYS);
+  if (fetchFrom < DATA_START) fetchFrom = DATA_START;
+  const chunks = rangeChunks(rangeFrom, rangeTo, { warmupDays: WARMUP_DAYS });
+  let liveAcc = new Map();
+  for (const [ci, chunk] of chunks.entries()) {
+    const report = chunkProgress(onProgress, ci, chunks.length, chunk.label, () => ({ tradesSoFar: 0 }));
+    const chunkFetchFrom = ci === 0 ? fetchFrom : chunk.from;
+    const live = await ensureDays(chunkFetchFrom, chunk.to, { onProgress: report, expiryCode: EXPIRY_CODE });
+    for (const [k, v] of live) liveAcc.set(k, v);
+    onPartial?.(build(chunk.to));
+  }
+
+  onProgress?.({ phase: 'simulate', done: 0, total: 1 });
+  const days = await loadDays(fetchFrom, rangeTo, liveAcc, { expiryCode: EXPIRY_CODE });
+  const dayByDate = new Map(days.map((d) => [d.dateKey, d]));
+  const now = getIstClock(new Date());
+  const closed = buildCandles(days, rule.timeframe).filter(
+    (c) => c.dateKey !== now.dateKey || c.end + 1 <= now.minutes,
+  );
+  const candles = annotate(closed, rule);
+  const trades = simulate({
+    candles,
+    dayByDate,
+    rule,
+    qty,
+    rangeFrom,
+    rangeTo,
+    onProgress,
+    skipped: skippedSignals,
+  });
+  allTrades.push(...trades);
+
+  const simDays = days.filter((d) => d.dateKey >= rangeFrom && d.dateKey <= rangeTo);
+  tradingDays = simDays.length;
+  const tradedDates = new Set(trades.map((t) => t.date));
+  for (const d of simDays) {
+    if (!tradedDates.has(d.dateKey)) flatDays.push(d.dateKey);
+  }
+
+  onProgress?.({ phase: 'done', done: 1, total: 1 });
   return build(null);
 }
 
-module.exports = { runBacktest, DEFAULT_RULE, HISTORY_START };
+module.exports = { runBacktest, DEFAULT_RULE, HISTORY_START, DATA_START };

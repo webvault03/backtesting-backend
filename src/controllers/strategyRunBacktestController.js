@@ -4,7 +4,6 @@ const gappingPlay = require('../services/gappingPlayBacktest/engine');
 const cvdOi = require('../services/cvdOiBacktest/engine');
 const openOiWalls = require('../services/openOiWallsBacktest/engine');
 const hpEntryZone = require('../services/hpEntryZoneBacktest/engine');
-const hpFiltered = require('../services/hpFilteredBacktest/engine');
 const { parseDateRange, numberIn, parseLots, jobHandlers } = require('./backtestRequest');
 
 const oiTrailHandlers = jobHandlers(
@@ -129,25 +128,26 @@ const hpEntryZoneHandlers = jobHandlers(
   'hp-entry-zone',
   (body) => {
     const d = hpEntryZone.DEFAULT_RULE;
-    const range = parseDateRange(body, { historyStart: '2020-01-01' });
-    if (range.to < hpEntryZone.HISTORY_START) throw new Error(`Option history starts ${hpEntryZone.HISTORY_START}`);
+    const range = parseDateRange(body, { historyStart: hpEntryZone.HISTORY_START });
+    if (range.to < hpEntryZone.HISTORY_START) throw new Error(`History starts ${hpEntryZone.HISTORY_START}`);
     return {
       from: range.from < hpEntryZone.HISTORY_START ? hpEntryZone.HISTORY_START : range.from,
       to: range.to,
       lots: parseLots(body.lots),
       rule: {
         timeframe: Number(body.timeframe) === 5 ? 5 : 15,
-        leftBars: Math.round(numberIn(body.leftBars, 1, 20, d.leftBars)),
-        rightBars: Math.round(numberIn(body.rightBars, 1, 20, d.rightBars)),
-        bodyRatio: numberIn(body.bodyRatio, 0.3, 0.95, d.bodyRatio),
+        leftBars: Math.round(numberIn(body.leftBars, 2, 10, d.leftBars)),
+        rightBars: Math.round(numberIn(body.rightBars, 1, 10, d.rightBars)),
+        bodyPct: numberIn(body.bodyPct, 0.3, 0.95, d.bodyPct),
         fvgMinAtr: numberIn(body.fvgMinAtr, 0, 1, d.fvgMinAtr),
-        atrLen: Math.round(numberIn(body.atrLen, 5, 50, d.atrLen)),
-        slBufAtr: numberIn(body.slBufAtr, 0, 1, d.slBufAtr),
+        entryMode: body.entryMode,
+        maxWaitBar: Math.round(numberIn(body.maxWaitBar, 3, 30, d.maxWaitBar)),
+        emaLen: Math.round(numberIn(body.emaLen, 20, 300, d.emaLen)),
+        useTrend: body.useTrend !== false,
+        rr1: numberIn(body.rr1, 0.25, 10, d.rr1),
+        rr2: numberIn(body.rr2, 0.5, 20, d.rr2),
         maxRiskAtr: numberIn(body.maxRiskAtr, 0.5, 10, d.maxRiskAtr),
-        maxCandlePts: numberIn(body.maxCandlePts, 1, 300, d.maxCandlePts),
-        /** Guide: fixed NIFTY R-target only (default 2R). No option-% / trail. */
-        targetMode: 'niftyRr',
-        rr: numberIn(body.rr, 0.5, 10, d.rr),
+        slBufAtr: numberIn(body.slBufAtr, 0, 1, d.slBufAtr),
         maxHoldDays: Math.round(numberIn(body.maxHoldDays, 1, 20, d.maxHoldDays)),
         slippage: numberIn(body.slippage, 0, 5, d.slippage),
         targets: Array.isArray(body.targets)
@@ -159,40 +159,9 @@ const hpEntryZoneHandlers = jobHandlers(
   hpEntryZone.runBacktest,
 );
 
-const hpFilteredHandlers = jobHandlers(
-  'hp-filtered',
-  (body) => {
-    const d = hpFiltered.DEFAULT_RULE;
-    const range = parseDateRange(body, { historyStart: '2020-01-01' });
-    if (range.to < hpFiltered.HISTORY_START) throw new Error(`Option history starts ${hpFiltered.HISTORY_START}`);
-    return {
-      from: range.from < hpFiltered.HISTORY_START ? hpFiltered.HISTORY_START : range.from,
-      to: range.to,
-      lots: parseLots(body.lots),
-      rule: {
-        timeframe: Number(body.timeframe) === 5 ? 5 : 15,
-        leftBars: Math.round(numberIn(body.leftBars, 1, 20, d.leftBars)),
-        rightBars: Math.round(numberIn(body.rightBars, 1, 20, d.rightBars)),
-        bodyRatio: numberIn(body.bodyRatio, 0.3, 0.95, d.bodyRatio),
-        maxCandlePts: numberIn(body.maxCandlePts, 1, 300, d.maxCandlePts),
-        trailArmPts: numberIn(body.trailArmPts, 10, 200, d.trailArmPts),
-        maxHoldDays: Math.round(numberIn(body.maxHoldDays, 1, 20, d.maxHoldDays)),
-        slippage: numberIn(body.slippage, 0, 5, d.slippage),
-        targets: Array.isArray(body.targets)
-          ? [...new Set(body.targets.map(Number).filter((n) => n >= 1 && n <= 1000))].sort((a, b) => a - b).slice(0, 10)
-          : d.targets,
-        expiryCode: 2,
-      },
-    };
-  },
-  hpFiltered.runBacktest,
-);
-
 module.exports = {
   postHpEntryZoneBacktestRun: hpEntryZoneHandlers.run,
   getHpEntryZoneBacktestJob: hpEntryZoneHandlers.status,
-  postHpFilteredBacktestRun: hpFilteredHandlers.run,
-  getHpFilteredBacktestJob: hpFilteredHandlers.status,
   postOpenOiWallsBacktestRun: openOiWallsHandlers.run,
   getOpenOiWallsBacktestJob: openOiWallsHandlers.status,
   postGappingPlayBacktestRun: gappingPlayHandlers.run,
