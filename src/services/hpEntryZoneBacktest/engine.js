@@ -1,12 +1,15 @@
 /**
  * High Probability Entry Zone — historical backtest.
- * Signal on NIFTY 5-min candles (FVG + strong body + BOS through last swing), trade ATM option.
+ *
+ * Signal, stop and target are all on NIFTY 5-min candles (Pine FVG + strong body + BOS).
+ * The ATM option is only the vehicle: buy at its premium on entry, sell at its premium when
+ * NIFTY hits SL / target / flip / eod.
  *
  * Buy zone → ATM CE · Sell zone → ATM PE.
  * Entry at the open of the minute after the signal candle closes.
- * SL = low of that option's same 5-min candle · target = entry + risk × rr.
- * Opposite zone while holding → flip (sell at that minute's open, take new side).
- * Consecutive same-side signals are filtered (like the Pine script). Anything open sold at eod.
+ * NIFTY SL = signal candle low (CE) / high (PE) · risk = |entrySpot − SL| · target = entrySpot ± risk×rr.
+ * Opposite zone while holding → flip. Consecutive same-side signals filtered. Open sold at eod.
+ * Option +10/+20… levels are recorded for the table only (do not exit).
  */
 const { addDays, ensureDays, loadDays } = require('../oiCandleAgreeBacktest/dataSource');
 const { rangeChunks, chunkProgress } = require('../backtestChunks');
@@ -28,16 +31,16 @@ const DEFAULT_RULE = {
   entryFrom: OPEN + 5,
   entryTo: 15 * 60,
   eod: 15 * 60 + 15,
-  maxCandlePts: 15,
+  /** Skip when the NIFTY signal candle (high − low) is bigger than this. */
+  maxCandlePts: 80,
   rr: 1,
   slippage: 0,
   /** Option pts above entry — recorded on the trade (table), do not exit. */
   targets: [10, 20, 30, 40, 50],
 };
 
-const signedPts = (n) => `${n >= 0 ? '+' : ''}${r2(n)}`;
-
 const r2 = (n) => Number(Number(n).toFixed(2));
+const signedPts = (n) => `${n >= 0 ? '+' : ''}${r2(n)}`;
 const hhmm = (m) => `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
 const fmt = (n) => Number(n).toLocaleString('en-IN', { maximumFractionDigits: 2, minimumFractionDigits: 2 });
 const span = (c) => `${hhmm(c.start)}–${hhmm(c.end + 1)}`;
@@ -84,12 +87,11 @@ function buildCandles(days, tf) {
 /**
  * Annotate candles with Pine-style HP Entry Zone signals.
  * Pivot confirms `rightBars` after the swing bar; FVG / strong body / BOS on the closed bar.
- * `last_signal` persists across the whole series (same as Pine `var`).
  */
 function annotateSignals(candles, { leftBars, rightBars, bodyRatio }) {
   let lastPh = null;
   let lastPl = null;
-  let lastSignal = 0; // 0 none · 1 buy · -1 sell
+  let lastSignal = 0;
 
   return candles.map((c, i) => {
     const out = {
@@ -134,7 +136,6 @@ function annotateSignals(candles, { leftBars, rightBars, bodyRatio }) {
 
     const buyZone = bullishFvg && strongPrev && lastPh != null && c.c > lastPh;
     const sellZone = bearishFvg && strongPrev && lastPl != null && c.c < lastPl;
-    // Evaluate both against the previous lastSignal (Pine does the same), then apply updates.
     const finalBuy = buyZone && lastSignal !== 1;
     const finalSell = sellZone && lastSignal !== -1;
     if (finalBuy) lastSignal = 1;
@@ -153,24 +154,9 @@ function priceAt(book, minute, ahead = 5) {
   return null;
 }
 
-function optionCandle(book, start, end) {
-  let c = null;
-  for (let m = start; m <= end; m += 1) {
-    const b = book.get(m);
-    if (!b) continue;
-    if (!c) c = { o: b.o, h: b.h, l: b.l, c: b.c };
-    else {
-      c.h = Math.max(c.h, b.h);
-      c.l = Math.min(c.l, b.l);
-      c.c = b.c;
-    }
-  }
-  return c;
-}
-
 const EXIT_REASON = {
-  SL: 'Stop loss (option candle low)',
-  TARGET: 'Target',
+  SL: 'NIFTY stop loss',
+  TARGET: 'NIFTY target',
   FLIP: 'Opposite zone — flip',
   EOD: 'Day close',
   OPEN: 'Still open (marked)',
@@ -244,38 +230,47 @@ function simulateDay({ day, dayCandles, nifty, rule, qty, lastMin, isToday, trad
       skipped.push({ dateKey: day.dateKey, time: span(sc), side, reason });
       return null;
     };
+    const pe = side === 'PE';
+    const candlePts = r2(sc.h - sc.l);
+    if (candlePts > rule.maxCandlePts) {
+      return skip(`NIFTY candle ${candlePts} pts (max ${rule.maxCandlePts})`);
+    }
+
     const spot = nifty.get(m)?.o;
     if (!Number.isFinite(spot)) return skip(`no NIFTY bar at ${hhmm(m)}`);
     const strike = Math.round(spot / STEP) * STEP;
     const book = bookFor(side, strike);
-    const oc = optionCandle(book, sc.start, sc.end);
-    if (!oc) return skip(`no ${strike} ${side} candle ${span(sc)}`);
-    const candlePts = r2(oc.h - oc.l);
-    if (candlePts > rule.maxCandlePts) return skip(`${strike} ${side} candle ${candlePts} pts (max ${rule.maxCandlePts})`);
     const px = priceAt(book, m, 3);
     if (!px) return skip(`no ${strike} ${side} price at ${hhmm(m)}`);
+
     const entryPremium = r2(px.price + rule.slippage);
-    const stop = r2(oc.l);
-    const risk = r2(entryPremium - stop);
-    if (risk <= 0) return skip(`${strike} ${side} opened ₹${fmt(px.price)} at or below the candle low ₹${fmt(stop)}`);
-    const target = r2(entryPremium + risk * rule.rr);
-    const pe = side === 'PE';
     const entrySpot = r2(nifty.get(px.min)?.o ?? spot);
+    // NIFTY stop from the signal candle; target = same risk × rr on NIFTY.
+    const stopSpot = pe ? r2(sc.h) : r2(sc.l);
+    const riskPts = pe ? r2(stopSpot - entrySpot) : r2(entrySpot - stopSpot);
+    if (riskPts <= 0) {
+      return skip(
+        pe
+          ? `NIFTY ${fmt(entrySpot)} already at/above signal high ${fmt(stopSpot)}`
+          : `NIFTY ${fmt(entrySpot)} already at/below signal low ${fmt(stopSpot)}`,
+      );
+    }
+    const targetSpot = pe ? r2(entrySpot - riskPts * rule.rr) : r2(entrySpot + riskPts * rule.rr);
     const bos = pe ? sc.lastPl : sc.lastPh;
     const levels = (rule.targets || []).map((pts) => ({ pts, premium: r2(entryPremium + pts), hit: false, time: null }));
+
     return {
       sc,
       side,
       strike,
       book,
-      oc,
       candlePts,
       startMin: px.min,
       entryPremium,
       entrySpot,
-      stop,
-      risk,
-      target,
+      stopSpot,
+      targetSpot,
+      riskPts,
       high: { px: entryPremium, min: px.min },
       low: { px: entryPremium, min: px.min },
       levels,
@@ -289,15 +284,11 @@ function simulateDay({ day, dayCandles, nifty, rule, qty, lastMin, isToday, trad
         },
         {
           time: hhmm(sc.end + 1),
-          text: `NIFTY ${span(sc)} O ${fmt(sc.o)} H ${fmt(sc.h)} L ${fmt(sc.l)} C ${fmt(sc.c)} · swing H ${fmt(sc.lastPh)} / L ${fmt(sc.lastPl)}`,
-        },
-        {
-          time: hhmm(sc.end + 1),
-          text: `${strike} ${side} candle ${span(sc)}: O ${fmt(oc.o)} H ${fmt(oc.h)} L ${fmt(oc.l)} C ${fmt(oc.c)} · size ${candlePts} pts (≤ ${rule.maxCandlePts})`,
+          text: `NIFTY ${span(sc)} O ${fmt(sc.o)} H ${fmt(sc.h)} L ${fmt(sc.l)} C ${fmt(sc.c)} · size ${candlePts} pts (≤ ${rule.maxCandlePts}) · swing H ${fmt(sc.lastPh)} / L ${fmt(sc.lastPl)}`,
         },
         {
           time: hhmm(px.min),
-          text: `Bought ${strike} ${side} at the ${hhmm(px.min)} open ₹${fmt(entryPremium)} · SL ₹${fmt(stop)} (candle low, risk ${fmt(risk)} pts) · target ₹${fmt(target)} (+${fmt(risk * rule.rr)} pts) · NIFTY ${fmt(entrySpot)}`,
+          text: `Bought ${strike} ${side} at ₹${fmt(entryPremium)} · NIFTY ${fmt(entrySpot)} · SL ${fmt(stopSpot)} (signal candle ${pe ? 'high' : 'low'}, risk ${fmt(riskPts)} pts) · target ${fmt(targetSpot)} (1 : ${rule.rr})`,
         },
       ],
     };
@@ -305,7 +296,6 @@ function simulateDay({ day, dayCandles, nifty, rule, qty, lastMin, isToday, trad
 
   const markPath = (p, m, bar) => {
     if (!bar) return;
-    // Entry minute starts at the fill — only the range after the open counts.
     const hi = m === p.startMin ? Math.max(p.entryPremium, bar.h) : bar.h;
     const lo = m === p.startMin ? Math.min(p.entryPremium, bar.l) : bar.l;
     if (hi > p.high.px) p.high = { px: hi, min: m };
@@ -316,7 +306,7 @@ function simulateDay({ day, dayCandles, nifty, rule, qty, lastMin, isToday, trad
     p.last = bar.c;
   };
 
-  const close = (p, fill, min, type, text) => {
+  const close = (p, fill, min, type, text, exitSpotIn) => {
     const exitPremium = r2(Math.max(0.05, (fill ? fill.price : p.last) - rule.slippage));
     const exitMin = fill?.min ?? min;
     if (exitPremium > p.high.px) p.high = { px: exitPremium, min: exitMin };
@@ -324,7 +314,7 @@ function simulateDay({ day, dayCandles, nifty, rule, qty, lastMin, isToday, trad
     for (const lv of p.levels) {
       if (!lv.hit && exitPremium >= lv.premium) Object.assign(lv, { hit: true, time: hhmm(exitMin) });
     }
-    const exitSpot = r2(nifty.get(exitMin)?.o ?? nifty.get(exitMin - 1)?.c ?? p.entrySpot);
+    const exitSpot = r2(exitSpotIn ?? nifty.get(exitMin)?.o ?? nifty.get(exitMin - 1)?.c ?? p.entrySpot);
     const points = r2(exitPremium - p.entryPremium);
     const grossPnL = r2(points * qty);
     const charges = optionCharges(p.entryPremium * qty, exitPremium * qty);
@@ -333,10 +323,10 @@ function simulateDay({ day, dayCandles, nifty, rule, qty, lastMin, isToday, trad
     const lowPx = r2(p.low.px);
     const maxGainPts = r2(highPx - p.entryPremium);
     const maxDropPts = r2(lowPx - p.entryPremium);
-    p.events.push({ time: hhmm(exitMin), text: `${text} → sold ${p.strike} ${p.side} at ₹${fmt(exitPremium)} · ${points >= 0 ? '+' : ''}${points} pts` });
+    p.events.push({ time: hhmm(exitMin), text: `${text} → sold ${p.strike} ${p.side} at ₹${fmt(exitPremium)} · ${points >= 0 ? '+' : ''}${points} pts · NIFTY ${fmt(exitSpot)}` });
     p.events.push({
       time: hhmm(exitMin),
-      text: `Entry → exit: high ₹${fmt(highPx)} (${signedPts(maxGainPts)}) at ${hhmm(p.high.min)} · low ₹${fmt(lowPx)} (${signedPts(maxDropPts)}) at ${hhmm(p.low.min)} · levels ${(p.levels || []).map((l) => `+${l.pts}${l.hit ? ` ${l.time}` : ' no'}`).join(' · ') || 'none'}`,
+      text: `Option path entry → exit: high ₹${fmt(highPx)} (${signedPts(maxGainPts)}) at ${hhmm(p.high.min)} · low ₹${fmt(lowPx)} (${signedPts(maxDropPts)}) at ${hhmm(p.low.min)} · levels ${(p.levels || []).map((l) => `+${l.pts}${l.hit ? ` ${l.time}` : ' no'}`).join(' · ') || 'none'}`,
     });
     const sc = p.sc;
     trades.push({
@@ -353,11 +343,13 @@ function simulateDay({ day, dayCandles, nifty, rule, qty, lastMin, isToday, trad
       lastPl: sc.lastPl == null ? null : r2(sc.lastPl),
       bullishFvg: Boolean(sc.bullishFvg),
       bearishFvg: Boolean(sc.bearishFvg),
-      optionCandle: { o: r2(p.oc.o), h: r2(p.oc.h), l: r2(p.oc.l), c: r2(p.oc.c) },
       candlePts: p.candlePts,
-      stop: p.stop,
-      riskPts: p.risk,
-      targetPremium: p.target,
+      stopSpot: p.stopSpot,
+      targetSpot: p.targetSpot,
+      riskPts: p.riskPts,
+      /** @deprecated alias kept for older UI — NIFTY stop */
+      stop: p.stopSpot,
+      targetPremium: p.targetSpot,
       entryTime: hhmm(p.startMin),
       entrySpot: p.entrySpot,
       entryPremium: p.entryPremium,
@@ -400,20 +392,48 @@ function simulateDay({ day, dayCandles, nifty, rule, qty, lastMin, isToday, trad
       }
     }
     if (!pos || m < pos.startMin) continue;
+
+    const n = nifty.get(m);
     const b = pos.book.get(m);
-    if (!b) continue;
-    markPath(pos, m, b);
-    if (b.l <= pos.stop) {
-      const price = b.o <= pos.stop ? b.o : pos.stop;
-      close(pos, { min: m, price }, m, 'SL', `Option fell to ₹${fmt(b.l)} at ${hhmm(m)} → stop ₹${fmt(pos.stop)} hit`);
+    if (b) markPath(pos, m, b);
+    if (!n) continue;
+
+    const pe = pos.side === 'PE';
+    const startSpot = m === pos.startMin ? pos.entrySpot : n.o;
+
+    // NIFTY stop first
+    const hitSl = pe ? n.h >= pos.stopSpot : n.l <= pos.stopSpot;
+    if (hitSl) {
+      const already = pe ? startSpot >= pos.stopSpot : startSpot <= pos.stopSpot;
+      const fill = priceAt(pos.book, m, 0) || (b ? { min: m, price: already ? b.o : b.o } : null) || priceAt(pos.book, m, 3);
+      const exitSpot = already ? startSpot : pos.stopSpot;
+      close(
+        pos,
+        fill,
+        m,
+        'SL',
+        `NIFTY ${pe ? 'rose' : 'fell'} to ${fmt(pe ? n.h : n.l)} at ${hhmm(m)} → SL ${fmt(pos.stopSpot)} hit`,
+        exitSpot,
+      );
       pos = null;
       continue;
     }
-    if (b.h >= pos.target) {
-      const price = m > pos.startMin && b.o >= pos.target ? b.o : pos.target;
-      close(pos, { min: m, price }, m, 'TARGET', `Option reached ₹${fmt(b.h)} at ${hhmm(m)} → target ₹${fmt(pos.target)} hit`);
+
+    // NIFTY target
+    const hitTarget = pe ? n.l <= pos.targetSpot : n.h >= pos.targetSpot;
+    if (hitTarget) {
+      const already = pe ? startSpot <= pos.targetSpot : startSpot >= pos.targetSpot;
+      const fill = priceAt(pos.book, m, 0) || (b ? { min: m, price: b.o } : null) || priceAt(pos.book, m, 3);
+      const exitSpot = already ? startSpot : pos.targetSpot;
+      close(
+        pos,
+        fill,
+        m,
+        'TARGET',
+        `NIFTY reached ${fmt(pe ? n.l : n.h)} at ${hhmm(m)} → target ${fmt(pos.targetSpot)} hit`,
+        exitSpot,
+      );
       pos = null;
-      continue;
     }
   }
   if (pos) {

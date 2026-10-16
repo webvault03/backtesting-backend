@@ -158,7 +158,7 @@ const hpEntryZoneHandlers = jobHandlers(
         leftBars: Math.round(numberIn(body.leftBars, 1, 20, d.leftBars)),
         rightBars: Math.round(numberIn(body.rightBars, 1, 20, d.rightBars)),
         bodyRatio: numberIn(body.bodyRatio, 0.3, 0.95, d.bodyRatio),
-        maxCandlePts: numberIn(body.maxCandlePts, 1, 200, d.maxCandlePts),
+        maxCandlePts: numberIn(body.maxCandlePts, 1, 300, d.maxCandlePts),
         rr: numberIn(body.rr, 0.25, 10, d.rr),
         slippage: numberIn(body.slippage, 0, 5, d.slippage),
         targets: Array.isArray(body.targets)
