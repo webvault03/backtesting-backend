@@ -31,7 +31,11 @@ const DEFAULT_RULE = {
   maxCandlePts: 15,
   rr: 1,
   slippage: 0,
+  /** Option pts above entry — recorded on the trade (table), do not exit. */
+  targets: [10, 20, 30, 40, 50],
 };
+
+const signedPts = (n) => `${n >= 0 ? '+' : ''}${r2(n)}`;
 
 const r2 = (n) => Number(Number(n).toFixed(2));
 const hhmm = (m) => `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
@@ -258,6 +262,7 @@ function simulateDay({ day, dayCandles, nifty, rule, qty, lastMin, isToday, trad
     const pe = side === 'PE';
     const entrySpot = r2(nifty.get(px.min)?.o ?? spot);
     const bos = pe ? sc.lastPl : sc.lastPh;
+    const levels = (rule.targets || []).map((pts) => ({ pts, premium: r2(entryPremium + pts), hit: false, time: null }));
     return {
       sc,
       side,
@@ -271,8 +276,9 @@ function simulateDay({ day, dayCandles, nifty, rule, qty, lastMin, isToday, trad
       stop,
       risk,
       target,
-      peak: entryPremium,
-      low: entryPremium,
+      high: { px: entryPremium, min: px.min },
+      low: { px: entryPremium, min: px.min },
+      levels,
       last: entryPremium,
       events: [
         {
@@ -297,15 +303,41 @@ function simulateDay({ day, dayCandles, nifty, rule, qty, lastMin, isToday, trad
     };
   };
 
+  const markPath = (p, m, bar) => {
+    if (!bar) return;
+    // Entry minute starts at the fill — only the range after the open counts.
+    const hi = m === p.startMin ? Math.max(p.entryPremium, bar.h) : bar.h;
+    const lo = m === p.startMin ? Math.min(p.entryPremium, bar.l) : bar.l;
+    if (hi > p.high.px) p.high = { px: hi, min: m };
+    if (lo < p.low.px) p.low = { px: lo, min: m };
+    for (const lv of p.levels) {
+      if (!lv.hit && hi >= lv.premium) Object.assign(lv, { hit: true, time: hhmm(m) });
+    }
+    p.last = bar.c;
+  };
+
   const close = (p, fill, min, type, text) => {
     const exitPremium = r2(Math.max(0.05, (fill ? fill.price : p.last) - rule.slippage));
     const exitMin = fill?.min ?? min;
+    if (exitPremium > p.high.px) p.high = { px: exitPremium, min: exitMin };
+    if (exitPremium < p.low.px) p.low = { px: exitPremium, min: exitMin };
+    for (const lv of p.levels) {
+      if (!lv.hit && exitPremium >= lv.premium) Object.assign(lv, { hit: true, time: hhmm(exitMin) });
+    }
     const exitSpot = r2(nifty.get(exitMin)?.o ?? nifty.get(exitMin - 1)?.c ?? p.entrySpot);
     const points = r2(exitPremium - p.entryPremium);
     const grossPnL = r2(points * qty);
     const charges = optionCharges(p.entryPremium * qty, exitPremium * qty);
     const netPnL = r2(grossPnL - charges);
+    const highPx = r2(p.high.px);
+    const lowPx = r2(p.low.px);
+    const maxGainPts = r2(highPx - p.entryPremium);
+    const maxDropPts = r2(lowPx - p.entryPremium);
     p.events.push({ time: hhmm(exitMin), text: `${text} → sold ${p.strike} ${p.side} at ₹${fmt(exitPremium)} · ${points >= 0 ? '+' : ''}${points} pts` });
+    p.events.push({
+      time: hhmm(exitMin),
+      text: `Entry → exit: high ₹${fmt(highPx)} (${signedPts(maxGainPts)}) at ${hhmm(p.high.min)} · low ₹${fmt(lowPx)} (${signedPts(maxDropPts)}) at ${hhmm(p.low.min)} · levels ${(p.levels || []).map((l) => `+${l.pts}${l.hit ? ` ${l.time}` : ' no'}`).join(' · ') || 'none'}`,
+    });
     const sc = p.sc;
     trades.push({
       id: `${day.dateKey}-${hhmm(p.startMin)}-${p.side}-${p.strike}`,
@@ -329,9 +361,15 @@ function simulateDay({ day, dayCandles, nifty, rule, qty, lastMin, isToday, trad
       entryTime: hhmm(p.startMin),
       entrySpot: p.entrySpot,
       entryPremium: p.entryPremium,
-      peakPremium: r2(Math.max(p.peak, exitPremium)),
-      lowPremium: r2(Math.min(p.low, exitPremium)),
-      maxGainPts: r2(Math.max(p.peak, exitPremium) - p.entryPremium),
+      targetLevels: p.levels.map((l) => ({ ...l, premium: r2(l.premium) })),
+      highAfterEntry: highPx,
+      highAfterTime: hhmm(p.high.min),
+      maxGainPts,
+      lowAfterEntry: lowPx,
+      lowAfterTime: hhmm(p.low.min),
+      maxDropPts,
+      peakPremium: highPx,
+      lowPremium: lowPx,
       exitTime: hhmm(exitMin),
       exitSpot,
       niftyPts: r2(p.side === 'CE' ? exitSpot - p.entrySpot : p.entrySpot - exitSpot),
@@ -364,23 +402,19 @@ function simulateDay({ day, dayCandles, nifty, rule, qty, lastMin, isToday, trad
     if (!pos || m < pos.startMin) continue;
     const b = pos.book.get(m);
     if (!b) continue;
+    markPath(pos, m, b);
     if (b.l <= pos.stop) {
       const price = b.o <= pos.stop ? b.o : pos.stop;
-      pos.low = Math.min(pos.low, price);
       close(pos, { min: m, price }, m, 'SL', `Option fell to ₹${fmt(b.l)} at ${hhmm(m)} → stop ₹${fmt(pos.stop)} hit`);
       pos = null;
       continue;
     }
     if (b.h >= pos.target) {
       const price = m > pos.startMin && b.o >= pos.target ? b.o : pos.target;
-      pos.peak = Math.max(pos.peak, b.h);
       close(pos, { min: m, price }, m, 'TARGET', `Option reached ₹${fmt(b.h)} at ${hhmm(m)} → target ₹${fmt(pos.target)} hit`);
       pos = null;
       continue;
     }
-    pos.peak = Math.max(pos.peak, b.h);
-    pos.low = Math.min(pos.low, b.l);
-    pos.last = b.c;
   }
   if (pos) {
     const still = isToday && lastMin + 1 < rule.eod;

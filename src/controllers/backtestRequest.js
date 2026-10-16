@@ -41,7 +41,13 @@ function jobHandlers(kind, parseRequest, runBacktest) {
   };
   const status = (req, res) => {
     const job = getJob(req.params.jobId, Number(req.query.have) || 0);
-    if (!job) return res.status(404).json({ ok: false, error: 'Job not found or expired' });
+    if (!job) {
+      return res.status(404).json({
+        ok: false,
+        error:
+          'Job not found or expired — backend likely restarted while the backtest was still running (jobs are in memory). Keep the server up for long monthly/yearly runs, then press Run again.',
+      });
+    }
     return res.json({ ok: true, job });
   };
   return { run, status };
@@ -50,7 +56,12 @@ function jobHandlers(kind, parseRequest, runBacktest) {
 /** POST /backtest/jobs/:jobId/cancel — works for any strategy's job. */
 function cancelBacktestJob(req, res) {
   const job = cancelJob(req.params.jobId);
-  if (!job) return res.status(404).json({ ok: false, error: 'Job not found or expired' });
+  if (!job) {
+    return res.status(404).json({
+      ok: false,
+      error: 'Job not found or expired — nothing to cancel (already finished or backend restarted).',
+    });
+  }
   return res.json({ ok: true, job });
 }
 

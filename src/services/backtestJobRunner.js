@@ -2,15 +2,21 @@ const crypto = require('crypto');
 
 /**
  * Background backtest jobs shared by the "run on Dhan history" strategies.
- * One run at a time across all of them — Dhan history calls are rate limited. Finished jobs kept 30 min.
+ * One run at a time across all of them — Dhan history calls are rate limited.
+ *
+ * Jobs live in memory only (lost on server restart / nodemon reload).
+ * Finished jobs are kept long enough for yearly runs to stay viewable after a long wait.
  */
 const jobs = new Map();
 let activeJobId = null;
-const JOB_TTL_MS = 30 * 60 * 1000;
+/** Keep finished results for 6 hours — yearly runs can take a long time to open / re-check. */
+const JOB_TTL_MS = 6 * 60 * 60 * 1000;
 
 function pruneJobs() {
   const now = Date.now();
   for (const [id, job] of jobs) {
+    // Never drop a still-running job — yearly / multi-month runs can exceed any short TTL.
+    if (job.status === 'running') continue;
     if (job.finishedAt && now - job.finishedAt > JOB_TTL_MS) jobs.delete(id);
   }
 }
@@ -111,6 +117,7 @@ function startJob(kind, params, run, { replace = false } = {}) {
 }
 
 function getJob(jobId, have = 0) {
+  pruneJobs();
   const job = jobs.get(jobId);
   return job ? publicJob(job, have) : null;
 }

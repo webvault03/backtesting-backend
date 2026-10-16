@@ -147,6 +147,7 @@ const haEma9Handlers = jobHandlers(
 const hpEntryZoneHandlers = jobHandlers(
   'hp-entry-zone',
   (body) => {
+    const d = hpEntryZone.DEFAULT_RULE;
     const range = parseDateRange(body, { historyStart: '2020-01-01' });
     if (range.to < hpEntryZone.HISTORY_START) throw new Error(`Option history starts ${hpEntryZone.HISTORY_START}`);
     return {
@@ -154,12 +155,15 @@ const hpEntryZoneHandlers = jobHandlers(
       to: range.to,
       lots: parseLots(body.lots),
       rule: {
-        leftBars: Math.round(numberIn(body.leftBars, 1, 20, hpEntryZone.DEFAULT_RULE.leftBars)),
-        rightBars: Math.round(numberIn(body.rightBars, 1, 20, hpEntryZone.DEFAULT_RULE.rightBars)),
-        bodyRatio: numberIn(body.bodyRatio, 0.3, 0.95, hpEntryZone.DEFAULT_RULE.bodyRatio),
-        maxCandlePts: numberIn(body.maxCandlePts, 1, 200, hpEntryZone.DEFAULT_RULE.maxCandlePts),
-        rr: numberIn(body.rr, 0.25, 10, hpEntryZone.DEFAULT_RULE.rr),
-        slippage: numberIn(body.slippage, 0, 5, hpEntryZone.DEFAULT_RULE.slippage),
+        leftBars: Math.round(numberIn(body.leftBars, 1, 20, d.leftBars)),
+        rightBars: Math.round(numberIn(body.rightBars, 1, 20, d.rightBars)),
+        bodyRatio: numberIn(body.bodyRatio, 0.3, 0.95, d.bodyRatio),
+        maxCandlePts: numberIn(body.maxCandlePts, 1, 200, d.maxCandlePts),
+        rr: numberIn(body.rr, 0.25, 10, d.rr),
+        slippage: numberIn(body.slippage, 0, 5, d.slippage),
+        targets: Array.isArray(body.targets)
+          ? [...new Set(body.targets.map(Number).filter((n) => n >= 1 && n <= 1000))].sort((a, b) => a - b).slice(0, 10)
+          : d.targets,
       },
     };
   },
