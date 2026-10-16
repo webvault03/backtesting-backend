@@ -36,6 +36,8 @@ const {
   getOpenOiWallsBacktestJob,
   postHpEntryZoneBacktestRun,
   getHpEntryZoneBacktestJob,
+  postHpFilteredBacktestRun,
+  getHpFilteredBacktestJob,
 } = require('../controllers/strategyRunBacktestController');
 const { postOiStrikeReportRun, getOiStrikeReportJob } = require('../controllers/oiStrikeReportController');
 const { getOiStrikeLive, postOiStrikeLiveBackfill } = require('../controllers/oiStrikeLiveController');
@@ -184,6 +186,8 @@ router.post('/backtest/open-oi-walls/run', postOpenOiWallsBacktestRun);
 router.get('/backtest/open-oi-walls/jobs/:jobId', getOpenOiWallsBacktestJob);
 router.post('/backtest/hp-entry-zone/run', postHpEntryZoneBacktestRun);
 router.get('/backtest/hp-entry-zone/jobs/:jobId', getHpEntryZoneBacktestJob);
+router.post('/backtest/hp-filtered/run', postHpFilteredBacktestRun);
+router.get('/backtest/hp-filtered/jobs/:jobId', getHpFilteredBacktestJob);
 router.post('/backtest/jobs/:jobId/cancel', cancelBacktestJob);
 router.post('/report/oi-strikes/run', postOiStrikeReportRun);
 router.get('/report/oi-strikes/jobs/:jobId', getOiStrikeReportJob);

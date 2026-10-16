@@ -4,6 +4,7 @@ const gappingPlay = require('../services/gappingPlayBacktest/engine');
 const cvdOi = require('../services/cvdOiBacktest/engine');
 const openOiWalls = require('../services/openOiWallsBacktest/engine');
 const hpEntryZone = require('../services/hpEntryZoneBacktest/engine');
+const hpFiltered = require('../services/hpFilteredBacktest/engine');
 const { parseDateRange, numberIn, parseLots, jobHandlers } = require('./backtestRequest');
 
 const oiTrailHandlers = jobHandlers(
@@ -158,9 +159,40 @@ const hpEntryZoneHandlers = jobHandlers(
   hpEntryZone.runBacktest,
 );
 
+const hpFilteredHandlers = jobHandlers(
+  'hp-filtered',
+  (body) => {
+    const d = hpFiltered.DEFAULT_RULE;
+    const range = parseDateRange(body, { historyStart: '2020-01-01' });
+    if (range.to < hpFiltered.HISTORY_START) throw new Error(`Option history starts ${hpFiltered.HISTORY_START}`);
+    return {
+      from: range.from < hpFiltered.HISTORY_START ? hpFiltered.HISTORY_START : range.from,
+      to: range.to,
+      lots: parseLots(body.lots),
+      rule: {
+        timeframe: Number(body.timeframe) === 5 ? 5 : 15,
+        leftBars: Math.round(numberIn(body.leftBars, 1, 20, d.leftBars)),
+        rightBars: Math.round(numberIn(body.rightBars, 1, 20, d.rightBars)),
+        bodyRatio: numberIn(body.bodyRatio, 0.3, 0.95, d.bodyRatio),
+        maxCandlePts: numberIn(body.maxCandlePts, 1, 300, d.maxCandlePts),
+        trailArmPts: numberIn(body.trailArmPts, 10, 200, d.trailArmPts),
+        maxHoldDays: Math.round(numberIn(body.maxHoldDays, 1, 20, d.maxHoldDays)),
+        slippage: numberIn(body.slippage, 0, 5, d.slippage),
+        targets: Array.isArray(body.targets)
+          ? [...new Set(body.targets.map(Number).filter((n) => n >= 1 && n <= 1000))].sort((a, b) => a - b).slice(0, 10)
+          : d.targets,
+        expiryCode: 2,
+      },
+    };
+  },
+  hpFiltered.runBacktest,
+);
+
 module.exports = {
   postHpEntryZoneBacktestRun: hpEntryZoneHandlers.run,
   getHpEntryZoneBacktestJob: hpEntryZoneHandlers.status,
+  postHpFilteredBacktestRun: hpFilteredHandlers.run,
+  getHpFilteredBacktestJob: hpFilteredHandlers.status,
   postOpenOiWallsBacktestRun: openOiWallsHandlers.run,
   getOpenOiWallsBacktestJob: openOiWallsHandlers.status,
   postGappingPlayBacktestRun: gappingPlayHandlers.run,
