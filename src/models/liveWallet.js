@@ -93,6 +93,27 @@ const liveWalletSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.Mixed,
       default: null,
     },
+    /** OI Strike Flow — 5m writing · ATM · trail · writers’ strike / SL −25 / 60m unarmed · 15:15. */
+    strategy18EngineSettings: {
+      symbol: { type: String, default: 'NIFTY' },
+      lotCount: { type: Number, default: 10 },
+      tradeFromTime: { type: String, default: '09:45' },
+      tradeToTime: { type: String, default: '13:00' },
+      eodExitTime: { type: String, default: '15:15' },
+      writingRatio: { type: Number, default: 1.5 },
+      optSlPoints: { type: Number, default: 25 },
+      unarmedMin: { type: Number, default: 60 },
+      maxTradesPerDay: { type: Number, default: 2 },
+      cooldownMinutes: { type: Number, default: 1 },
+      perTradeCost: { type: Number, default: 100 },
+      monthlyTargetPct: { type: Number, default: 30 },
+      monthlyStopPct: { type: Number, default: 10 },
+    },
+    /** Latest OI Strike Flow signal snapshot for UI. */
+    strategy18FlowSignal: {
+      type: mongoose.Schema.Types.Mixed,
+      default: null,
+    },
     /** OI Flow Tracker paper (Put writing→CALL / Put buying→PUT). */
     oiFlowEngineSettings: {
       enabled: { type: Boolean, default: true },

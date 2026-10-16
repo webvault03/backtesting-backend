@@ -18,6 +18,7 @@ const handlers = jobHandlers(
         mode,
         capPoints: numberIn(body.capPoints, 1, 500, null),
         fixedPoints: numberIn(body.fixedPoints, 1, 500, 30),
+        maxTrades: Math.round(numberIn(body.maxTrades, 1, 10, 3)),
       },
     };
   },

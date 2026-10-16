@@ -150,17 +150,41 @@ async function archiveTape(dateKey) {
   return rows;
 }
 
-/** Same gate as evaluateEntry: first fresh AGREE bar inside the trade window. */
-function findEntry(rows) {
-  for (let now = TRADE_FROM; now <= TRADE_TO + 16; now += 1) {
+/**
+ * Fresh AGREE bar inside the trade window, seen at minute `now` ≥ `afterMin`.
+ * `afterBarEnd` skips bars already used or rejected (must be a newer 15m bar).
+ */
+function findEntry(rows, { afterMin = TRADE_FROM, afterBarEnd = -Infinity } = {}) {
+  const start = Math.max(TRADE_FROM, afterMin);
+  for (let now = start; now <= TRADE_TO + 16; now += 1) {
     const visible = rows.filter((r) => Number(r.minutes) <= now);
     const res = findLatestAgreeSignal(visible, now);
     if (!res.ok) continue;
     const barEnd = Number(res.bar?.endMin);
+    if (!Number.isFinite(barEnd) || barEnd <= afterBarEnd) continue;
     if (barEnd < TRADE_FROM || barEnd > TRADE_TO || now - barEnd > 16) continue;
     return { now, res };
   }
   return null;
+}
+
+/**
+ * How strong an AGREE bar is — used to allow a 2nd+ trade only when the new signal beats the last one.
+ * Shape rank first (body > wick trap > plain UP/DOWN), then candle range (pts), then body size.
+ */
+function signalStrength(res) {
+  const shape = res.shape || res.bar?.shape || '';
+  const rank =
+    shape === 'bull_body' || shape === 'bear_body'
+      ? 3
+      : shape === 'upper_wick_trap' || shape === 'lower_wick_trap'
+        ? 2
+        : shape === 'tiny' || shape === 'doji'
+          ? 0
+          : 1;
+  const range = Number(res.bar?.range) || 0;
+  const body = Math.abs(Number(res.bar?.close) - Number(res.bar?.open)) || 0;
+  return r2(rank * 1000 + range + body * 0.01);
 }
 
 function crossFraction(from, extreme, level) {
@@ -242,48 +266,81 @@ function signalCandle(day, bar) {
   return { high: r2(high), low: r2(low) };
 }
 
+/**
+ * One or more trades in a day. First AGREE in the window is taken; after that trade closes,
+ * a later AGREE is taken only when its strength is strictly higher than the previous trade's signal
+ * (same entry / SL / trail / 15:15 rules). One position at a time · max `maxTrades` per day.
+ */
 function runDay(day, rows, rule, lots) {
   const lotSize = niftyLotSizeOn(day.dateKey);
   const qty = lots * lotSize;
-  const entry = findEntry(rows);
-  if (!entry) return { dateKey: day.dateKey, trade: null };
-  const { now: entryMin, res } = entry;
-  const optionType = res.optionType;
-  const isPE = optionType === 'PE';
-  const entrySpot = day.nifty.get(entryMin)?.o;
-  const strike = niftyAtmStrike(entrySpot);
-  const entryCandle = day.opt[optionType].get(strike)?.get(entryMin);
-  if (!Number.isFinite(entrySpot) || !entryCandle) {
-    return { dateKey: day.dateKey, trade: null, skipped: `no ${optionType} ${strike} data at ${hhmm(entryMin)}` };
-  }
-  const entryPremium = entryCandle.o;
-  const candle = signalCandle(day, res.bar);
-  const sl = stopLevel(rule, { isPE, entrySpot, candle });
-  const sim = simulate({ day, optionType, strike, entryMin, entryPremium, entrySpot, sl });
-  if (!sim) return { dateKey: day.dateKey, trade: null, skipped: 'simulation incomplete' };
-
-  const points = r2(sim.exitPremium - entryPremium);
-  const netPnL = r2(points * qty - CHARGES);
-  const reasonText = {
-    SL: `Nifty SL ${sl} crossed`,
-    TRAIL: `Trail lock +${r2(sim.exitPremium - entryPremium)}`,
-    EOD: '15:15 close',
-  }[sim.exitType];
+  const maxTrades = Math.max(1, Math.round(rule.maxTrades || 1));
   const month = Number(day.dateKey.slice(5, 7));
-  return {
-    dateKey: day.dateKey,
-    trade: {
-      id: `${day.dateKey}-${optionType}-${strike}`,
+  const trades = [];
+  let searchFrom = TRADE_FROM;
+  let afterBarEnd = -Infinity;
+  let lastStrength = -Infinity;
+  let skipped = null;
+
+  while (trades.length < maxTrades) {
+    const entry = findEntry(rows, { afterMin: searchFrom, afterBarEnd });
+    if (!entry) break;
+    const { now: entryMin, res } = entry;
+    const barEnd = Number(res.bar.endMin);
+    const strength = signalStrength(res);
+
+    // After the first trade, only a strictly stronger AGREE may open the next one.
+    if (trades.length > 0 && strength <= lastStrength) {
+      afterBarEnd = barEnd;
+      searchFrom = Math.max(searchFrom, entryMin + 1);
+      continue;
+    }
+
+    const optionType = res.optionType;
+    const isPE = optionType === 'PE';
+    const entrySpot = day.nifty.get(entryMin)?.o;
+    const strike = niftyAtmStrike(entrySpot);
+    const entryCandle = day.opt[optionType].get(strike)?.get(entryMin);
+    if (!Number.isFinite(entrySpot) || !entryCandle) {
+      skipped = `no ${optionType} ${strike} data at ${hhmm(entryMin)}`;
+      afterBarEnd = barEnd;
+      searchFrom = Math.max(searchFrom, entryMin + 1);
+      continue;
+    }
+
+    const entryPremium = entryCandle.o;
+    const candle = signalCandle(day, res.bar);
+    const sl = stopLevel(rule, { isPE, entrySpot, candle });
+    const sim = simulate({ day, optionType, strike, entryMin, entryPremium, entrySpot, sl });
+    if (!sim) {
+      skipped = 'simulation incomplete';
+      break;
+    }
+
+    const points = r2(sim.exitPremium - entryPremium);
+    const netPnL = r2(points * qty - CHARGES);
+    const reasonText = {
+      SL: `Nifty SL ${sl} crossed`,
+      TRAIL: `Trail lock +${r2(sim.exitPremium - entryPremium)}`,
+      EOD: '15:15 close',
+    }[sim.exitType];
+    const dayTradeNo = trades.length + 1;
+    trades.push({
+      id: `${day.dateKey}-${hhmm(entryMin)}-${optionType}-${strike}`,
       date: day.dateKey,
       monthKey: day.dateKey.slice(0, 7),
       monthShort: MONTHS[month - 1],
+      dayTradeNo,
       side: optionType,
       strike,
       signalTime: hhmm(res.bar.startMin),
       shape: res.shape,
       pair: res.pair,
+      signalStrength: strength,
+      prevSignalStrength: dayTradeNo > 1 ? lastStrength : null,
       candleHigh: candle.high,
       candleLow: candle.low,
+      candleRange: r2(Number(res.bar.range) || candle.high - candle.low),
       entryTime: hhmm(entryMin),
       entrySpot,
       entryPremium,
@@ -305,8 +362,16 @@ function runDay(day, rows, rule, lots) {
       charges: CHARGES,
       netPnL,
       isWin: netPnL > 0,
-    },
-  };
+    });
+
+    lastStrength = strength;
+    afterBarEnd = barEnd;
+    // Next search only after this trade is flat (one at a time).
+    searchFrom = Math.max(sim.exitMin + 1, barEnd + 1);
+    if (sim.exitType === 'EOD' || sim.exitMin >= EOD) break;
+  }
+
+  return { dateKey: day.dateKey, trades, ...(skipped && !trades.length ? { skipped } : {}) };
 }
 
 function summarize(trades) {
@@ -334,6 +399,13 @@ function summarize(trades) {
   const grossWin = wins.reduce((s, t) => s + t.netPnL, 0);
   const grossLoss = -trades.filter((t) => !t.isWin).reduce((s, t) => s + t.netPnL, 0);
   const charges = trades.reduce((s, t) => s + t.charges, 0);
+  const dayPnl = {};
+  const dayCount = {};
+  for (const t of trades) {
+    dayPnl[t.date] = (dayPnl[t.date] || 0) + t.netPnL;
+    dayCount[t.date] = (dayCount[t.date] || 0) + 1;
+  }
+  const dayVals = Object.values(dayPnl);
   return {
     trades: trades.length,
     wins: wins.length,
@@ -343,8 +415,9 @@ function summarize(trades) {
     avgCharges: trades.length ? r2(charges / trades.length) : 0,
     maxDrawdown: r2(maxDd),
     profitFactor: grossLoss > 0 ? r2(grossWin / grossLoss) : null,
-    greenDays: trades.filter((t) => t.netPnL > 0).length,
-    redDays: trades.filter((t) => t.netPnL <= 0).length,
+    greenDays: dayVals.filter((p) => p > 0).length,
+    redDays: dayVals.filter((p) => p <= 0).length,
+    multiTradeDays: Object.values(dayCount).filter((n) => n > 1).length,
     months: Object.values(months).sort((a, b) => a.key.localeCompare(b.key)),
     years: Object.values(years).sort((a, b) => a.year.localeCompare(b.year)),
   };
@@ -353,21 +426,29 @@ function summarize(trades) {
 /**
  * @param {{ from: string, to: string, rule?: object, lots?: number, tapeSource?: 'dhan'|'auto', onProgress?: Function, onPartial?: Function }} opts
  */
-async function runBacktest({ from, to, rule = { mode: 'candle', capPoints: null }, lots = 10, tapeSource = 'dhan', onProgress, onPartial } = {}) {
+async function runBacktest({ from, to, rule = { mode: 'candle', capPoints: null, maxTrades: 3 }, lots = 10, tapeSource = 'dhan', onProgress, onPartial } = {}) {
   const lotCount = Math.max(1, Math.round(lots));
+  const dayRule = { mode: 'candle', capPoints: null, maxTrades: 3, ...rule };
   const results = [];
 
   const build = (doneThrough) => {
-    const trades = results.filter((r) => r.trade).map((r) => r.trade);
+    const trades = results.flatMap((r) => r.trades || []);
     return {
       from,
       to,
-      rule: { ...rule, entryFrom: hhmm(TRADE_FROM), entryTo: hhmm(TRADE_TO), eod: hhmm(EOD), charges: CHARGES },
+      rule: {
+        ...dayRule,
+        entryFrom: hhmm(TRADE_FROM),
+        entryTo: hhmm(TRADE_TO),
+        eod: hhmm(EOD),
+        charges: CHARGES,
+        maxTrades: Math.max(1, Math.round(dayRule.maxTrades || 1)),
+      },
       lots: lotCount,
       qty: lotCount * niftyLotSizeOn(to),
       tapeSource,
       tradingDays: results.length,
-      noSignalDays: results.filter((r) => !r.trade && !r.skipped).map((r) => r.dateKey),
+      noSignalDays: results.filter((r) => !(r.trades || []).length && !r.skipped).map((r) => r.dateKey),
       skippedDays: results.filter((r) => r.skipped).map((r) => ({ dateKey: r.dateKey, reason: r.skipped })),
       summary: summarize(trades),
       trades,
@@ -377,7 +458,9 @@ async function runBacktest({ from, to, rule = { mode: 'candle', capPoints: null 
 
   const chunks = rangeChunks(from, to, { warmupDays: WARMUP_DAYS });
   for (const [ci, chunk] of chunks.entries()) {
-    const report = chunkProgress(onProgress, ci, chunks.length, chunk.label, () => ({ tradesSoFar: results.filter((r) => r.trade).length }));
+    const report = chunkProgress(onProgress, ci, chunks.length, chunk.label, () => ({
+      tradesSoFar: results.reduce((n, r) => n + (r.trades || []).length, 0),
+    }));
     const fetchFrom = addDays(chunk.from, -WARMUP_DAYS);
     const live = await ensureDays(fetchFrom, chunk.to, { onProgress: report });
     const days = (await loadDays(fetchFrom, chunk.to, live)).map(indexDay);
@@ -395,8 +478,8 @@ async function runBacktest({ from, to, rule = { mode: 'candle', capPoints: null 
         if (rows) tape = 'exact';
       }
       if (!rows) rows = buildTape(day, days[i - 1] || null);
-      const r = runDay(day, rows, rule, lotCount);
-      if (r.trade) r.trade.tape = tape;
+      const r = runDay(day, rows, dayRule, lotCount);
+      for (const t of r.trades || []) t.tape = tape;
       results.push(r);
     }
     onPartial?.(build(chunk.to));
@@ -409,5 +492,6 @@ module.exports = {
   runBacktest,
   buildTape,
   findEntry,
+  signalStrength,
   stopLevel,
 };

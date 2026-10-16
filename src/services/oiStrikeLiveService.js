@@ -303,4 +303,17 @@ async function requestBackfill() {
   return backfillToday(clock.dateKey, Math.min(clock.minutes, SESSION_TO + 1));
 }
 
-module.exports = { ensureEngineRunning, getLiveReport, requestBackfill, purgeOtherDays };
+/** Today's tape as a report-shaped day (for paper-live signal engines). */
+async function loadTodayDay(dateKey) {
+  const key = dateKey || sessionInfo().tapeDateKey;
+  const docs = await OiStrikeLiveMinute.find({ symbol: SYMBOL, dateKey: key }).sort({ minutes: 1 }).lean();
+  return { dateKey: key, docs, day: reportDay(key, docs), rowCount: docs.length };
+}
+
+module.exports = {
+  ensureEngineRunning,
+  getLiveReport,
+  requestBackfill,
+  purgeOtherDays,
+  loadTodayDay,
+};
