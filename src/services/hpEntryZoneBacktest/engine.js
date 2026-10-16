@@ -7,9 +7,10 @@
  * NIFTY SL = confirmation (signal) candle low (CE) / high (PE).
  * SL exits only when a later TF candle *closes* at/through the SL — wick touch does not cut.
  *
- * No fixed R target. Option premium trail (actual strike):
- *   +10 → lock +2 · +20 → lock +10 · then peak − 10 (+30→+20, +50→+40, …).
- * Retrace to lock → sell option. Opposite zone → flip. Open sold at eod.
+ * Target modes:
+ *   - niftyRr (default): NIFTY entry ± risk × rr (default 2R), hit on NIFTY 1-min touch
+ *   - optionPct: option premium +X% of entry (invested), hit on 1-min option high touch
+ * No option trail. No day-close — positions carry overnight until TARGET / SL / FLIP / max hold.
  */
 const { addDays, ensureDays, loadDays } = require('../oiCandleAgreeBacktest/dataSource');
 const { rangeChunks, chunkProgress } = require('../backtestChunks');
@@ -30,11 +31,20 @@ const DEFAULT_RULE = {
   bodyRatio: 0.6,
   entryFrom: OPEN + 15,
   entryTo: 15 * 60,
+  /** Session end for scanning bars (not a forced exit). */
   eod: 15 * 60 + 15,
   /** Skip when the NIFTY signal candle (high − low) is bigger than this. */
   maxCandlePts: 120,
+  /** Target mode: 'niftyRr' | 'optionPct'. */
+  targetMode: 'niftyRr',
+  /** Fixed NIFTY target as multiple of risk (entry → SL). Default 2R. */
+  rr: 2,
+  /** When targetMode=optionPct: exit when option premium ≥ entry × (1 + pct/100). */
+  optionTargetPct: 30,
+  /** Max trading days to hold overnight (entry day = 1). */
+  maxHoldDays: 5,
   slippage: 0,
-  /** Option pts above entry — recorded on the trade (table). Trail also uses these rungs. */
+  /** Option pts above entry — recorded on the trade (table only). */
   targets: [10, 20, 30, 40, 50],
 };
 
@@ -43,13 +53,6 @@ const signedPts = (n) => `${n >= 0 ? '+' : ''}${r2(n)}`;
 const hhmm = (m) => `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
 const fmt = (n) => Number(n).toLocaleString('en-IN', { maximumFractionDigits: 2, minimumFractionDigits: 2 });
 const span = (c) => `${hhmm(c.start)}–${hhmm(c.end + 1)}`;
-
-/** Option trail lock (pts above entry): +10→+2, +20→+10, then peak−10 carry-forward. */
-function trailLock(gain) {
-  if (gain >= 20) return Math.max(10, Math.floor(gain) - 10);
-  if (gain >= 10) return 2;
-  return null;
-}
 
 function optionCharges(buyValue, sellValue) {
   const brokerage = 40;
@@ -158,14 +161,18 @@ function priceAt(book, minute, ahead = 5) {
 
 const EXIT_REASON = {
   SL: 'NIFTY SL (TF close)',
-  TRAIL: 'Option trail lock',
+  TARGET: 'NIFTY target',
   FLIP: 'Opposite zone — flip',
-  EOD: 'Day close',
+  TIME: 'Max hold days',
   OPEN: 'Still open (marked)',
 };
 
-function exitReason(type, tf) {
+function exitReason(type, tf, rule) {
   if (type === 'SL') return `NIFTY SL (${tf}-min close)`;
+  if (type === 'TARGET') {
+    if (rule?.targetMode === 'optionPct') return `Option +${rule.optionTargetPct}% of entry`;
+    return `NIFTY target ${rule?.rr ?? 2}R`;
+  }
   return EXIT_REASON[type] || type;
 }
 
@@ -176,7 +183,7 @@ function summarize(trades) {
   const months = {};
   const years = {};
   const dayPnl = {};
-  const exits = { SL: 0, TRAIL: 0, FLIP: 0, EOD: 0, OPEN: 0 };
+  const exits = { SL: 0, TARGET: 0, FLIP: 0, TIME: 0, OPEN: 0 };
   for (const t of trades) {
     equity += t.netPnL;
     peak = Math.max(peak, equity);
@@ -218,9 +225,14 @@ function summarize(trades) {
   };
 }
 
-function simulateDay({ day, dayCandles, nifty, rule, qty, lastMin, isToday, trades, skipped }) {
+/**
+ * @returns {{ taken: number, carry: object|null }}
+ */
+function simulateDay({ day, dayCandles, nifty, rule, qty, lastMin, isToday, trades, skipped, carry }) {
   const tf = rule.timeframe;
   const tfLabel = `${tf}-min`;
+  const rr = rule.rr;
+  const optionPct = rule.targetMode === 'optionPct';
   const books = new Map();
   const bookFor = (side, strike) => {
     const key = `${side}-${strike}`;
@@ -233,10 +245,23 @@ function simulateDay({ day, dayCandles, nifty, rule, qty, lastMin, isToday, trad
     candleCloseAt.set(c.end + 1, c);
     if (c.signal) signalAt.set(c.end + 1, c);
   }
-  const endMin = Math.min(rule.eod, lastMin + 1);
+  const endMin = Math.min(LAST + 1, lastMin + 1);
   const month = Number(day.dateKey.slice(5, 7));
-  let pos = null;
+  let pos = carry || null;
   let taken = 0;
+
+  if (pos) {
+    pos.book = bookFor(pos.side, pos.strike);
+    pos.holdDays = (pos.holdDays || 1) + 1;
+    const holdTgt =
+      pos.targetPremium != null
+        ? `option target ₹${fmt(pos.targetPremium)} (+${rule.optionTargetPct}%)`
+        : `NIFTY target ${fmt(pos.targetSpot)} (${rr}R)`;
+    pos.events.push({
+      time: `${day.dateKey} ${hhmm(OPEN)}`,
+      text: `Overnight hold → day ${pos.holdDays} · ${pos.strike} ${pos.side} · ${holdTgt} · SL ${fmt(pos.stopSpot)}`,
+    });
+  }
 
   const open = (sc, side, m) => {
     const skip = (reason) => {
@@ -267,8 +292,13 @@ function simulateDay({ day, dayCandles, nifty, rule, qty, lastMin, isToday, trad
           : `NIFTY ${fmt(entrySpot)} already at/below signal low ${fmt(stopSpot)}`,
       );
     }
+    const targetSpot = optionPct ? null : pe ? r2(entrySpot - riskPts * rr) : r2(entrySpot + riskPts * rr);
+    const targetPremium = optionPct ? r2(entryPremium * (1 + rule.optionTargetPct / 100)) : null;
     const bos = pe ? sc.lastPl : sc.lastPh;
     const levels = (rule.targets || []).map((pts) => ({ pts, premium: r2(entryPremium + pts), hit: false, time: null }));
+    const tgtText = optionPct
+      ? `option target ₹${fmt(targetPremium)} (+${rule.optionTargetPct}% of entry)`
+      : `NIFTY target ${fmt(targetSpot)} (${rr}R)`;
 
     return {
       sc,
@@ -276,14 +306,17 @@ function simulateDay({ day, dayCandles, nifty, rule, qty, lastMin, isToday, trad
       strike,
       book,
       candlePts,
+      entryDate: day.dateKey,
+      holdDays: 1,
       startMin: px.min,
       entryPremium,
       entrySpot,
       stopSpot,
+      targetSpot,
+      targetPremium,
       riskPts,
-      trailLockPts: null,
-      high: { px: entryPremium, min: px.min },
-      low: { px: entryPremium, min: px.min },
+      high: { px: entryPremium, min: px.min, date: day.dateKey },
+      low: { px: entryPremium, min: px.min, date: day.dateKey },
       levels,
       last: entryPremium,
       events: [
@@ -299,7 +332,7 @@ function simulateDay({ day, dayCandles, nifty, rule, qty, lastMin, isToday, trad
         },
         {
           time: hhmm(px.min),
-          text: `Bought ${strike} ${side} at ₹${fmt(entryPremium)} · NIFTY ${fmt(entrySpot)} · SL ${fmt(stopSpot)} (signal ${pe ? 'high' : 'low'}, exit only on later ${tfLabel} *close*) · trail +10→+2 / +20→+10 / then peak−10`,
+          text: `Bought ${strike} ${side} at ₹${fmt(entryPremium)} · NIFTY ${fmt(entrySpot)} · SL ${fmt(stopSpot)} (${tfLabel} close only) · ${tgtText} · overnight hold OK · no day close`,
         },
       ],
     };
@@ -307,20 +340,12 @@ function simulateDay({ day, dayCandles, nifty, rule, qty, lastMin, isToday, trad
 
   const markPath = (p, m, bar) => {
     if (!bar) return;
-    const hi = m === p.startMin ? Math.max(p.entryPremium, bar.h) : bar.h;
-    const lo = m === p.startMin ? Math.min(p.entryPremium, bar.l) : bar.l;
-    if (hi > p.high.px) p.high = { px: hi, min: m };
-    if (lo < p.low.px) p.low = { px: lo, min: m };
+    const hi = m === p.startMin && p.entryDate === day.dateKey ? Math.max(p.entryPremium, bar.h) : bar.h;
+    const lo = m === p.startMin && p.entryDate === day.dateKey ? Math.min(p.entryPremium, bar.l) : bar.l;
+    if (hi > p.high.px) p.high = { px: hi, min: m, date: day.dateKey };
+    if (lo < p.low.px) p.low = { px: lo, min: m, date: day.dateKey };
     for (const lv of p.levels) {
-      if (!lv.hit && hi >= lv.premium) Object.assign(lv, { hit: true, time: hhmm(m) });
-    }
-    const next = trailLock(hi - p.entryPremium);
-    if (next != null && (p.trailLockPts == null || next > p.trailLockPts)) {
-      p.trailLockPts = next;
-      p.events.push({
-        time: hhmm(m),
-        text: `Trail armed / raised → lock +${next} pts (option ₹${fmt(p.entryPremium + next)}) · peak ${signedPts(hi - p.entryPremium)}`,
-      });
+      if (!lv.hit && hi >= lv.premium) Object.assign(lv, { hit: true, time: `${day.dateKey} ${hhmm(m)}` });
     }
     p.last = bar.c;
   };
@@ -328,10 +353,10 @@ function simulateDay({ day, dayCandles, nifty, rule, qty, lastMin, isToday, trad
   const close = (p, fill, min, type, text, exitSpotIn) => {
     const exitPremium = r2(Math.max(0.05, (fill ? fill.price : p.last) - rule.slippage));
     const exitMin = fill?.min ?? min;
-    if (exitPremium > p.high.px) p.high = { px: exitPremium, min: exitMin };
-    if (exitPremium < p.low.px) p.low = { px: exitPremium, min: exitMin };
+    if (exitPremium > p.high.px) p.high = { px: exitPremium, min: exitMin, date: day.dateKey };
+    if (exitPremium < p.low.px) p.low = { px: exitPremium, min: exitMin, date: day.dateKey };
     for (const lv of p.levels) {
-      if (!lv.hit && exitPremium >= lv.premium) Object.assign(lv, { hit: true, time: hhmm(exitMin) });
+      if (!lv.hit && exitPremium >= lv.premium) Object.assign(lv, { hit: true, time: `${day.dateKey} ${hhmm(exitMin)}` });
     }
     const exitSpot = r2(exitSpotIn ?? nifty.get(exitMin)?.o ?? nifty.get(exitMin - 1)?.c ?? p.entrySpot);
     const points = r2(exitPremium - p.entryPremium);
@@ -342,17 +367,23 @@ function simulateDay({ day, dayCandles, nifty, rule, qty, lastMin, isToday, trad
     const lowPx = r2(p.low.px);
     const maxGainPts = r2(highPx - p.entryPremium);
     const maxDropPts = r2(lowPx - p.entryPremium);
-    p.events.push({ time: hhmm(exitMin), text: `${text} → sold ${p.strike} ${p.side} at ₹${fmt(exitPremium)} · ${points >= 0 ? '+' : ''}${points} pts · NIFTY ${fmt(exitSpot)}` });
+    const entryMonth = Number(p.entryDate.slice(5, 7));
     p.events.push({
-      time: hhmm(exitMin),
-      text: `Option path: high ₹${fmt(highPx)} (${signedPts(maxGainPts)}) at ${hhmm(p.high.min)} · low ₹${fmt(lowPx)} (${signedPts(maxDropPts)}) at ${hhmm(p.low.min)} · trail lock ${p.trailLockPts == null ? '—' : `+${p.trailLockPts}`} · levels ${(p.levels || []).map((l) => `+${l.pts}${l.hit ? ` ${l.time}` : ' no'}`).join(' · ') || 'none'}`,
+      time: `${day.dateKey} ${hhmm(exitMin)}`,
+      text: `${text} → sold ${p.strike} ${p.side} at ₹${fmt(exitPremium)} · ${points >= 0 ? '+' : ''}${points} pts · NIFTY ${fmt(exitSpot)} · held ${p.holdDays}d`,
+    });
+    p.events.push({
+      time: `${day.dateKey} ${hhmm(exitMin)}`,
+      text: `Option path: high ₹${fmt(highPx)} (${signedPts(maxGainPts)}) · low ₹${fmt(lowPx)} (${signedPts(maxDropPts)}) · target ${p.targetPremium != null ? `option ₹${fmt(p.targetPremium)} (+${rule.optionTargetPct}%)` : `NIFTY ${fmt(p.targetSpot)} (${rr}R)`} · levels ${(p.levels || []).map((l) => `+${l.pts}${l.hit ? ` ${l.time}` : ' no'}`).join(' · ') || 'none'}`,
     });
     const sc = p.sc;
     trades.push({
-      id: `${day.dateKey}-${hhmm(p.startMin)}-${p.side}-${p.strike}`,
-      date: day.dateKey,
-      monthKey: day.dateKey.slice(0, 7),
-      monthShort: MONTHS[month - 1],
+      id: `${p.entryDate}-${hhmm(p.startMin)}-${p.side}-${p.strike}`,
+      date: p.entryDate,
+      exitDate: day.dateKey,
+      holdDays: p.holdDays,
+      monthKey: p.entryDate.slice(0, 7),
+      monthShort: MONTHS[entryMonth - 1],
       side: p.side,
       strike: p.strike,
       signal: sc.signal,
@@ -364,19 +395,21 @@ function simulateDay({ day, dayCandles, nifty, rule, qty, lastMin, isToday, trad
       bearishFvg: Boolean(sc.bearishFvg),
       candlePts: p.candlePts,
       stopSpot: p.stopSpot,
+      targetSpot: p.targetSpot,
+      targetPremium: p.targetPremium,
+      optionTargetPct: optionPct ? rule.optionTargetPct : null,
       riskPts: p.riskPts,
+      rr: optionPct ? null : rr,
       stop: p.stopSpot,
-      trailLockPts: p.trailLockPts,
-      trailStop: p.trailLockPts == null ? null : r2(p.entryPremium + p.trailLockPts),
       entryTime: hhmm(p.startMin),
       entrySpot: p.entrySpot,
       entryPremium: p.entryPremium,
       targetLevels: p.levels.map((l) => ({ ...l, premium: r2(l.premium) })),
       highAfterEntry: highPx,
-      highAfterTime: hhmm(p.high.min),
+      highAfterTime: `${p.high.date || p.entryDate} ${hhmm(p.high.min)}`,
       maxGainPts,
       lowAfterEntry: lowPx,
-      lowAfterTime: hhmm(p.low.min),
+      lowAfterTime: `${p.low.date || p.entryDate} ${hhmm(p.low.min)}`,
       maxDropPts,
       peakPremium: highPx,
       lowPremium: lowPx,
@@ -385,7 +418,7 @@ function simulateDay({ day, dayCandles, nifty, rule, qty, lastMin, isToday, trad
       niftyPts: r2(p.side === 'CE' ? exitSpot - p.entrySpot : p.entrySpot - exitSpot),
       exitPremium,
       exitType: type,
-      exitReason: exitReason(type, tf),
+      exitReason: exitReason(type, tf, rule),
       timeframe: tf,
       points,
       grossPnL,
@@ -395,6 +428,13 @@ function simulateDay({ day, dayCandles, nifty, rule, qty, lastMin, isToday, trad
       events: p.events,
     });
   };
+
+  // Force exit if max overnight hold reached at open
+  if (pos && pos.holdDays > rule.maxHoldDays) {
+    const fill = priceAt(pos.book, OPEN, 10) || (pos.last != null ? { min: OPEN, price: pos.last } : null);
+    close(pos, fill, OPEN, 'TIME', `Max hold ${rule.maxHoldDays} trading days — force exit at open`);
+    pos = null;
+  }
 
   for (let m = OPEN; m < endMin; m += 1) {
     const sc = signalAt.get(m);
@@ -410,17 +450,43 @@ function simulateDay({ day, dayCandles, nifty, rule, qty, lastMin, isToday, trad
         if (pos) taken += 1;
       }
     }
-    if (!pos || m < pos.startMin) continue;
+    if (!pos) continue;
+    if (pos.entryDate === day.dateKey && m < pos.startMin) continue;
 
     const b = pos.book.get(m);
     if (b) markPath(pos, m, b);
 
-    // Option trail — on 1-min strike premium (touch lock → exit)
-    if (pos.trailLockPts != null && b) {
-      const lockPx = r2(pos.entryPremium + pos.trailLockPts);
-      if (b.l <= lockPx) {
-        const price = b.o <= lockPx ? b.o : lockPx;
-        close(pos, { min: m, price }, m, 'TRAIL', `Option trailed to lock ₹${fmt(lockPx)} (+${pos.trailLockPts} pts) at ${hhmm(m)}`);
+    // Option % of invested — 1-min option high touch
+    if (optionPct && pos.targetPremium != null && b) {
+      if (b.h >= pos.targetPremium) {
+        const price = b.o >= pos.targetPremium ? b.o : pos.targetPremium;
+        close(
+          pos,
+          { min: m, price },
+          m,
+          'TARGET',
+          `Option touched +${rule.optionTargetPct}% target ₹${fmt(pos.targetPremium)} at ${hhmm(m)} (high ₹${fmt(b.h)})`,
+        );
+        pos = null;
+        continue;
+      }
+    }
+
+    const nBar = nifty.get(m);
+    // Fixed NIFTY R-target — 1-min touch
+    if (!optionPct && nBar && pos.targetSpot != null) {
+      const pe = pos.side === 'PE';
+      const hit = pe ? nBar.l <= pos.targetSpot : nBar.h >= pos.targetSpot;
+      if (hit) {
+        const fill = priceAt(pos.book, m, 0) || (b ? { min: m, price: b.o } : null) || priceAt(pos.book, m, 3);
+        close(
+          pos,
+          fill,
+          m,
+          'TARGET',
+          `NIFTY touched target ${fmt(pos.targetSpot)} (${rr}R) at ${hhmm(m)} (spot H ${fmt(nBar.h)} / L ${fmt(nBar.l)})`,
+          pe ? Math.min(nBar.l, pos.targetSpot) : Math.max(nBar.h, pos.targetSpot),
+        );
         pos = null;
         continue;
       }
@@ -428,7 +494,7 @@ function simulateDay({ day, dayCandles, nifty, rule, qty, lastMin, isToday, trad
 
     // NIFTY SL — only when a *completed* TF candle closes through the stop (not wick touch)
     const closed = candleCloseAt.get(m);
-    if (closed && closed.start !== pos.sc.start) {
+    if (closed && !(pos.entryDate === day.dateKey && closed.start === pos.sc.start)) {
       const pe = pos.side === 'PE';
       const slClose = pe ? closed.c >= pos.stopSpot : closed.c <= pos.stopSpot;
       if (slClose) {
@@ -445,12 +511,13 @@ function simulateDay({ day, dayCandles, nifty, rule, qty, lastMin, isToday, trad
       }
     }
   }
-  if (pos) {
-    const still = isToday && lastMin + 1 < rule.eod;
-    const fill = still ? null : priceAt(pos.book, rule.eod);
-    close(pos, fill, still ? lastMin : rule.eod, still ? 'OPEN' : 'EOD', still ? `Trade still open — marked at the ${hhmm(lastMin)} price` : `${hhmm(rule.eod)} day close`);
+
+  // No day close — carry overnight (mark OPEN only if this is live today past scan)
+  if (pos && isToday && lastMin + 1 < rule.eod) {
+    close(pos, null, lastMin, 'OPEN', `Trade still open — marked at the ${hhmm(lastMin)} price`);
+    return { taken, carry: null };
   }
-  return taken;
+  return { taken, carry: pos };
 }
 
 /**
@@ -458,11 +525,18 @@ function simulateDay({ day, dayCandles, nifty, rule, qty, lastMin, isToday, trad
  */
 async function runBacktest({ from, to, lots = 10, rule: ruleIn = {}, onProgress, onPartial } = {}) {
   const timeframe = Number(ruleIn.timeframe) === 5 ? 5 : 15;
+  const rr = Math.min(10, Math.max(0.5, Number(ruleIn.rr) || DEFAULT_RULE.rr));
+  const maxHoldDays = Math.min(20, Math.max(1, Math.round(Number(ruleIn.maxHoldDays) || DEFAULT_RULE.maxHoldDays)));
+  const targetMode = ruleIn.targetMode === 'optionPct' ? 'optionPct' : 'niftyRr';
+  const optionTargetPct = Math.min(200, Math.max(5, Number(ruleIn.optionTargetPct) || DEFAULT_RULE.optionTargetPct));
   const rule = {
     ...DEFAULT_RULE,
     ...ruleIn,
     timeframe,
-    // First entries after one full TF bar from open (5→09:20, 15→09:30) unless caller overrides.
+    rr,
+    maxHoldDays,
+    targetMode,
+    optionTargetPct,
     entryFrom: Number.isFinite(ruleIn.entryFrom) ? ruleIn.entryFrom : OPEN + timeframe,
   };
   const lotCount = Math.max(1, Math.round(lots));
@@ -471,6 +545,7 @@ async function runBacktest({ from, to, lots = 10, rule: ruleIn = {}, onProgress,
   const flatDays = [];
   const skippedSignals = [];
   let tradingDays = 0;
+  let carry = null;
 
   const build = (doneThrough) => ({
     from,
@@ -482,6 +557,8 @@ async function runBacktest({ from, to, lots = 10, rule: ruleIn = {}, onProgress,
       entryFrom: hhmm(rule.entryFrom),
       entryTo: hhmm(rule.entryTo),
       eod: hhmm(rule.eod),
+      overnight: true,
+      dayClose: false,
     },
     tradingDays,
     flatDays: [...flatDays],
@@ -511,7 +588,7 @@ async function runBacktest({ from, to, lots = 10, rule: ruleIn = {}, onProgress,
       report({ phase: 'simulate', done: di, total: simDays.length, dateKey: day.dateKey });
       const isToday = day.dateKey === getIstClock(new Date()).dateKey;
       const lastMin = Math.max(...day.nifty.m.filter((m) => m <= LAST && (!isToday || m < now.minutes)), OPEN);
-      const taken = simulateDay({
+      const { taken, carry: next } = simulateDay({
         day,
         dayCandles: byDay.get(day.dateKey) || [],
         nifty: minuteMap(day.nifty),
@@ -521,13 +598,78 @@ async function runBacktest({ from, to, lots = 10, rule: ruleIn = {}, onProgress,
         isToday,
         trades,
         skipped: skippedSignals,
+        carry,
       });
-      if (!taken) flatDays.push(day.dateKey);
+      carry = next;
+      if (!taken && !carry) flatDays.push(day.dateKey);
     });
     tradingDays += simDays.length;
     onPartial?.(build(chunk.to));
   }
+
+  // End of range — mark any still-open overnight position
+  if (carry) {
+    const dayKey = carry.entryDate;
+    const month = Number(dayKey.slice(5, 7));
+    const exitPremium = r2(Math.max(0.05, carry.last - rule.slippage));
+    const points = r2(exitPremium - carry.entryPremium);
+    const grossPnL = r2(points * qty);
+    const charges = optionCharges(carry.entryPremium * qty, exitPremium * qty);
+    const netPnL = r2(grossPnL - charges);
+    const highPx = r2(carry.high.px);
+    const lowPx = r2(carry.low.px);
+    carry.events.push({ time: to, text: `Range end — still open, marked at ₹${fmt(exitPremium)}` });
+    trades.push({
+      id: `${carry.entryDate}-${hhmm(carry.startMin)}-${carry.side}-${carry.strike}`,
+      date: carry.entryDate,
+      exitDate: to,
+      holdDays: carry.holdDays,
+      monthKey: carry.entryDate.slice(0, 7),
+      monthShort: MONTHS[month - 1],
+      side: carry.side,
+      strike: carry.strike,
+      signal: carry.sc.signal,
+      signalTime: span(carry.sc),
+      signalCandle: { o: r2(carry.sc.o), h: r2(carry.sc.h), l: r2(carry.sc.l), c: r2(carry.sc.c) },
+      lastPh: carry.sc.lastPh == null ? null : r2(carry.sc.lastPh),
+      lastPl: carry.sc.lastPl == null ? null : r2(carry.sc.lastPl),
+      bullishFvg: Boolean(carry.sc.bullishFvg),
+      bearishFvg: Boolean(carry.sc.bearishFvg),
+      candlePts: carry.candlePts,
+      stopSpot: carry.stopSpot,
+      targetSpot: carry.targetSpot,
+      riskPts: carry.riskPts,
+      rr: rule.rr,
+      stop: carry.stopSpot,
+      entryTime: hhmm(carry.startMin),
+      entrySpot: carry.entrySpot,
+      entryPremium: carry.entryPremium,
+      targetLevels: carry.levels.map((l) => ({ ...l, premium: r2(l.premium) })),
+      highAfterEntry: highPx,
+      highAfterTime: `${carry.high.date || carry.entryDate} ${hhmm(carry.high.min)}`,
+      maxGainPts: r2(highPx - carry.entryPremium),
+      lowAfterEntry: lowPx,
+      lowAfterTime: `${carry.low.date || carry.entryDate} ${hhmm(carry.low.min)}`,
+      maxDropPts: r2(lowPx - carry.entryPremium),
+      peakPremium: highPx,
+      lowPremium: lowPx,
+      exitTime: 'EOD',
+      exitSpot: carry.entrySpot,
+      niftyPts: 0,
+      exitPremium,
+      exitType: 'OPEN',
+      exitReason: EXIT_REASON.OPEN,
+      timeframe: rule.timeframe,
+      points,
+      grossPnL,
+      charges,
+      netPnL,
+      isWin: netPnL > 0,
+      events: carry.events,
+    });
+  }
+
   return build(null);
 }
 
-module.exports = { runBacktest, DEFAULT_RULE, HISTORY_START, trailLock };
+module.exports = { runBacktest, DEFAULT_RULE, HISTORY_START };
