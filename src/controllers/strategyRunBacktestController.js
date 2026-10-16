@@ -140,6 +140,8 @@ const hpEntryZoneHandlers = jobHandlers(
         rightBars: Math.round(numberIn(body.rightBars, 1, 20, d.rightBars)),
         bodyRatio: numberIn(body.bodyRatio, 0.3, 0.95, d.bodyRatio),
         maxCandlePts: numberIn(body.maxCandlePts, 1, 300, d.maxCandlePts),
+        /** Guide: fixed NIFTY R-target only (default 2R). No option-% / trail. */
+        targetMode: 'niftyRr',
         rr: numberIn(body.rr, 0.5, 10, d.rr),
         maxHoldDays: Math.round(numberIn(body.maxHoldDays, 1, 20, d.maxHoldDays)),
         slippage: numberIn(body.slippage, 0, 5, d.slippage),

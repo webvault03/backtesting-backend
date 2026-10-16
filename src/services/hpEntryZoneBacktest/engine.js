@@ -7,10 +7,11 @@
  * NIFTY SL = confirmation (signal) candle low (CE) / high (PE).
  * SL exits only when a later TF candle *closes* at/through the SL — wick touch does not cut.
  *
- * Target modes:
- *   - niftyRr (default): NIFTY entry ± risk × rr (default 2R), hit on NIFTY 1-min touch
- *   - optionPct: option premium +X% of entry (invested), hit on 1-min option high touch
- * No option trail. No day-close — positions carry overnight until TARGET / SL / FLIP / max hold.
+ * Guide rules (default):
+ *   - Target: NIFTY entry ± risk × rr (default 2R), hit on NIFTY 1-min touch
+ *   - SL: signal candle H/L, exit only on later TF *close* (wick alone does not cut)
+ *   - Overnight hold OK — no 15:15 day close · flip / max hold days
+ *   - No option trail · no fixed % of invested
  */
 const { addDays, ensureDays, loadDays } = require('../oiCandleAgreeBacktest/dataSource');
 const { rangeChunks, chunkProgress } = require('../backtestChunks');
@@ -35,12 +36,10 @@ const DEFAULT_RULE = {
   eod: 15 * 60 + 15,
   /** Skip when the NIFTY signal candle (high − low) is bigger than this. */
   maxCandlePts: 120,
-  /** Target mode: 'niftyRr' | 'optionPct'. */
+  /** Always niftyRr for the live strategy guide (2R default). */
   targetMode: 'niftyRr',
-  /** Fixed NIFTY target as multiple of risk (entry → SL). Default 2R. */
+  /** Fixed NIFTY target = entry ± risk × rr. Default 2R (try 1.5R for more hits). */
   rr: 2,
-  /** When targetMode=optionPct: exit when option premium ≥ entry × (1 + pct/100). */
-  optionTargetPct: 30,
   /** Max trading days to hold overnight (entry day = 1). */
   maxHoldDays: 5,
   slippage: 0,
@@ -167,12 +166,9 @@ const EXIT_REASON = {
   OPEN: 'Still open (marked)',
 };
 
-function exitReason(type, tf, rule) {
+function exitReason(type, tf, rr) {
   if (type === 'SL') return `NIFTY SL (${tf}-min close)`;
-  if (type === 'TARGET') {
-    if (rule?.targetMode === 'optionPct') return `Option +${rule.optionTargetPct}% of entry`;
-    return `NIFTY target ${rule?.rr ?? 2}R`;
-  }
+  if (type === 'TARGET') return `NIFTY target ${rr ?? 2}R`;
   return EXIT_REASON[type] || type;
 }
 
@@ -232,7 +228,6 @@ function simulateDay({ day, dayCandles, nifty, rule, qty, lastMin, isToday, trad
   const tf = rule.timeframe;
   const tfLabel = `${tf}-min`;
   const rr = rule.rr;
-  const optionPct = rule.targetMode === 'optionPct';
   const books = new Map();
   const bookFor = (side, strike) => {
     const key = `${side}-${strike}`;
@@ -253,13 +248,9 @@ function simulateDay({ day, dayCandles, nifty, rule, qty, lastMin, isToday, trad
   if (pos) {
     pos.book = bookFor(pos.side, pos.strike);
     pos.holdDays = (pos.holdDays || 1) + 1;
-    const holdTgt =
-      pos.targetPremium != null
-        ? `option target ₹${fmt(pos.targetPremium)} (+${rule.optionTargetPct}%)`
-        : `NIFTY target ${fmt(pos.targetSpot)} (${rr}R)`;
     pos.events.push({
       time: `${day.dateKey} ${hhmm(OPEN)}`,
-      text: `Overnight hold → day ${pos.holdDays} · ${pos.strike} ${pos.side} · ${holdTgt} · SL ${fmt(pos.stopSpot)}`,
+      text: `Overnight hold → day ${pos.holdDays} · ${pos.strike} ${pos.side} · NIFTY target ${fmt(pos.targetSpot)} (${rr}R) · SL ${fmt(pos.stopSpot)}`,
     });
   }
 
@@ -292,13 +283,9 @@ function simulateDay({ day, dayCandles, nifty, rule, qty, lastMin, isToday, trad
           : `NIFTY ${fmt(entrySpot)} already at/below signal low ${fmt(stopSpot)}`,
       );
     }
-    const targetSpot = optionPct ? null : pe ? r2(entrySpot - riskPts * rr) : r2(entrySpot + riskPts * rr);
-    const targetPremium = optionPct ? r2(entryPremium * (1 + rule.optionTargetPct / 100)) : null;
+    const targetSpot = pe ? r2(entrySpot - riskPts * rr) : r2(entrySpot + riskPts * rr);
     const bos = pe ? sc.lastPl : sc.lastPh;
     const levels = (rule.targets || []).map((pts) => ({ pts, premium: r2(entryPremium + pts), hit: false, time: null }));
-    const tgtText = optionPct
-      ? `option target ₹${fmt(targetPremium)} (+${rule.optionTargetPct}% of entry)`
-      : `NIFTY target ${fmt(targetSpot)} (${rr}R)`;
 
     return {
       sc,
@@ -313,7 +300,6 @@ function simulateDay({ day, dayCandles, nifty, rule, qty, lastMin, isToday, trad
       entrySpot,
       stopSpot,
       targetSpot,
-      targetPremium,
       riskPts,
       high: { px: entryPremium, min: px.min, date: day.dateKey },
       low: { px: entryPremium, min: px.min, date: day.dateKey },
@@ -332,7 +318,7 @@ function simulateDay({ day, dayCandles, nifty, rule, qty, lastMin, isToday, trad
         },
         {
           time: hhmm(px.min),
-          text: `Bought ${strike} ${side} at ₹${fmt(entryPremium)} · NIFTY ${fmt(entrySpot)} · SL ${fmt(stopSpot)} (${tfLabel} close only) · ${tgtText} · overnight hold OK · no day close`,
+          text: `Bought ${strike} ${side} at ₹${fmt(entryPremium)} · NIFTY ${fmt(entrySpot)} · SL ${fmt(stopSpot)} (${tfLabel} close only) · NIFTY target ${fmt(targetSpot)} (${rr}R) · overnight hold OK · no day close`,
         },
       ],
     };
@@ -374,7 +360,7 @@ function simulateDay({ day, dayCandles, nifty, rule, qty, lastMin, isToday, trad
     });
     p.events.push({
       time: `${day.dateKey} ${hhmm(exitMin)}`,
-      text: `Option path: high ₹${fmt(highPx)} (${signedPts(maxGainPts)}) · low ₹${fmt(lowPx)} (${signedPts(maxDropPts)}) · target ${p.targetPremium != null ? `option ₹${fmt(p.targetPremium)} (+${rule.optionTargetPct}%)` : `NIFTY ${fmt(p.targetSpot)} (${rr}R)`} · levels ${(p.levels || []).map((l) => `+${l.pts}${l.hit ? ` ${l.time}` : ' no'}`).join(' · ') || 'none'}`,
+      text: `Option path: high ₹${fmt(highPx)} (${signedPts(maxGainPts)}) · low ₹${fmt(lowPx)} (${signedPts(maxDropPts)}) · NIFTY target ${fmt(p.targetSpot)} (${rr}R) · levels ${(p.levels || []).map((l) => `+${l.pts}${l.hit ? ` ${l.time}` : ' no'}`).join(' · ') || 'none'}`,
     });
     const sc = p.sc;
     trades.push({
@@ -396,10 +382,8 @@ function simulateDay({ day, dayCandles, nifty, rule, qty, lastMin, isToday, trad
       candlePts: p.candlePts,
       stopSpot: p.stopSpot,
       targetSpot: p.targetSpot,
-      targetPremium: p.targetPremium,
-      optionTargetPct: optionPct ? rule.optionTargetPct : null,
       riskPts: p.riskPts,
-      rr: optionPct ? null : rr,
+      rr,
       stop: p.stopSpot,
       entryTime: hhmm(p.startMin),
       entrySpot: p.entrySpot,
@@ -418,7 +402,7 @@ function simulateDay({ day, dayCandles, nifty, rule, qty, lastMin, isToday, trad
       niftyPts: r2(p.side === 'CE' ? exitSpot - p.entrySpot : p.entrySpot - exitSpot),
       exitPremium,
       exitType: type,
-      exitReason: exitReason(type, tf, rule),
+      exitReason: exitReason(type, tf, rr),
       timeframe: tf,
       points,
       grossPnL,
@@ -456,25 +440,9 @@ function simulateDay({ day, dayCandles, nifty, rule, qty, lastMin, isToday, trad
     const b = pos.book.get(m);
     if (b) markPath(pos, m, b);
 
-    // Option % of invested — 1-min option high touch
-    if (optionPct && pos.targetPremium != null && b) {
-      if (b.h >= pos.targetPremium) {
-        const price = b.o >= pos.targetPremium ? b.o : pos.targetPremium;
-        close(
-          pos,
-          { min: m, price },
-          m,
-          'TARGET',
-          `Option touched +${rule.optionTargetPct}% target ₹${fmt(pos.targetPremium)} at ${hhmm(m)} (high ₹${fmt(b.h)})`,
-        );
-        pos = null;
-        continue;
-      }
-    }
-
     const nBar = nifty.get(m);
     // Fixed NIFTY R-target — 1-min touch
-    if (!optionPct && nBar && pos.targetSpot != null) {
+    if (nBar && pos.targetSpot != null) {
       const pe = pos.side === 'PE';
       const hit = pe ? nBar.l <= pos.targetSpot : nBar.h >= pos.targetSpot;
       if (hit) {
@@ -527,16 +495,13 @@ async function runBacktest({ from, to, lots = 10, rule: ruleIn = {}, onProgress,
   const timeframe = Number(ruleIn.timeframe) === 5 ? 5 : 15;
   const rr = Math.min(10, Math.max(0.5, Number(ruleIn.rr) || DEFAULT_RULE.rr));
   const maxHoldDays = Math.min(20, Math.max(1, Math.round(Number(ruleIn.maxHoldDays) || DEFAULT_RULE.maxHoldDays)));
-  const targetMode = ruleIn.targetMode === 'optionPct' ? 'optionPct' : 'niftyRr';
-  const optionTargetPct = Math.min(200, Math.max(5, Number(ruleIn.optionTargetPct) || DEFAULT_RULE.optionTargetPct));
   const rule = {
     ...DEFAULT_RULE,
     ...ruleIn,
     timeframe,
     rr,
     maxHoldDays,
-    targetMode,
-    optionTargetPct,
+    targetMode: 'niftyRr',
     entryFrom: Number.isFinite(ruleIn.entryFrom) ? ruleIn.entryFrom : OPEN + timeframe,
   };
   const lotCount = Math.max(1, Math.round(lots));
