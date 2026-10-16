@@ -1,17 +1,18 @@
 /**
  * High Probability Entry Zone — historical backtest (NIFTY 5-min or 15-min).
  *
- * Signal on NIFTY TF (Pine FVG + strong body + BOS). ATM option is the fill only.
- * Buy zone → CE · Sell zone → PE · entry at the minute after the signal candle closes.
+ * Matches Pine "High Probability Entry Zone PRO":
+ *   Signal on NIFTY TF (FVG + strong prior body + BOS inside the 3-candle pattern).
+ *   ATM option is the fill only (BUY zone → CE · SELL → PE).
+ *   Entry at the minute after the signal candle closes.
  *
- * NIFTY SL = confirmation (signal) candle low (CE) / high (PE).
- * SL exits only when a later TF candle *closes* at/through the SL — wick touch does not cut.
+ * NIFTY SL (Structure mode) = min(low[1], low[2]) − buffer for CE /
+ *                              max(high[1], high[2]) + buffer for PE
+ *   (NOT the signal candle H/L). Exit only on later TF *close* through SL.
  *
- * Guide rules (default):
- *   - Target: NIFTY entry ± risk × rr (default 2R), hit on NIFTY 1-min touch
- *   - SL: signal candle H/L, exit only on later TF *close* (wick alone does not cut)
- *   - Overnight hold OK — no 15:15 day close · flip / max hold days
- *   - No option trail · no fixed % of invested
+ * Target: NIFTY entry ± risk × rr (default 2R), hit on NIFTY 1-min touch.
+ * Same-minute conflict: SL wins (Pine conservative).
+ * Overnight hold OK — no 15:15 day close · flip / max hold days.
  */
 const { addDays, ensureDays, loadDays } = require('../oiCandleAgreeBacktest/dataSource');
 const { rangeChunks, chunkProgress } = require('../backtestChunks');
@@ -30,7 +31,14 @@ const DEFAULT_RULE = {
   leftBars: 5,
   rightBars: 5,
   bodyRatio: 0.6,
-  entryFrom: OPEN + 15,
+  /** Pine fvgMinAtr — skip tiny gaps. */
+  fvgMinAtr: 0.1,
+  atrLen: 14,
+  /** Pine slBufAtr — Structure SL buffer in ATR units. */
+  slBufAtr: 0.1,
+  /** Pine maxRiskAtr — skip if entry→SL risk exceeds this × ATR. */
+  maxRiskAtr: 3,
+  entryFrom: OPEN + 5, // ~09:20 like Pine session start on 15m
   entryTo: 15 * 60,
   /** Session end for scanning bars (not a forced exit). */
   eod: 15 * 60 + 15,
@@ -38,7 +46,7 @@ const DEFAULT_RULE = {
   maxCandlePts: 120,
   /** Always niftyRr for the live strategy guide (2R default). */
   targetMode: 'niftyRr',
-  /** Fixed NIFTY target = entry ± risk × rr. Default 2R (try 1.5R for more hits). */
+  /** Fixed NIFTY target = entry ± risk × rr. Default 2R. */
   rr: 2,
   /** Max trading days to hold overnight (entry day = 1). */
   maxHoldDays: 5,
@@ -92,10 +100,11 @@ function buildCandles(days, tf) {
   return out;
 }
 
-function annotateSignals(candles, { leftBars, rightBars, bodyRatio }) {
+function annotateSignals(candles, { leftBars, rightBars, bodyRatio, fvgMinAtr = 0.1, atrLen = 14 }) {
   let lastPh = null;
   let lastPl = null;
   let lastSignal = 0;
+  const trs = [];
 
   return candles.map((c, i) => {
     const out = {
@@ -106,6 +115,9 @@ function annotateSignals(candles, { leftBars, rightBars, bodyRatio }) {
       strongBody: false,
       bullishFvg: false,
       bearishFvg: false,
+      atr: null,
+      structSlLong: null,
+      structSlShort: null,
     };
 
     const pivotAt = i - rightBars;
@@ -124,22 +136,42 @@ function annotateSignals(candles, { leftBars, rightBars, bodyRatio }) {
     out.lastPh = lastPh;
     out.lastPl = lastPl;
 
+    const prevClose = i > 0 ? candles[i - 1].c : c.c;
+    const tr = Math.max(c.h - c.l, Math.abs(c.h - prevClose), Math.abs(c.l - prevClose));
+    trs.push(tr);
+    const atr =
+      trs.length >= atrLen ? trs.slice(-atrLen).reduce((a, b) => a + b, 0) / atrLen : null;
+    out.atr = atr == null ? null : r2(atr);
+
     if (i < 2) return out;
 
     const prev = candles[i - 1];
     const older = candles[i - 2];
     const range = c.h - c.l;
     const prevRange = prev.h - prev.l;
+    // Pine strongBody1 = body of candle[1] (prior bar)
     const strongPrev = prevRange > 0 && Math.abs(prev.c - prev.o) > prevRange * bodyRatio;
     out.strongBody = range > 0 && Math.abs(c.c - c.o) > range * bodyRatio;
 
-    const bullishFvg = c.l > older.h && prev.c > prev.o;
-    const bearishFvg = c.h < older.l && prev.c < prev.o;
+    // Pine: FVG gap must be ≥ fvgMinAtr × ATR
+    const gapUp = c.l - older.h;
+    const gapDn = older.l - c.h;
+    const fvgOk = atr != null && atr > 0;
+    const bullishFvg = fvgOk && gapUp > 0 && prev.c > prev.o && gapUp >= fvgMinAtr * atr;
+    const bearishFvg = fvgOk && gapDn > 0 && prev.c < prev.o && gapDn >= fvgMinAtr * atr;
     out.bullishFvg = bullishFvg;
     out.bearishFvg = bearishFvg;
 
-    const buyZone = bullishFvg && strongPrev && lastPh != null && c.c > lastPh;
-    const sellZone = bearishFvg && strongPrev && lastPl != null && c.c < lastPl;
+    // Pine: BOS must happen inside the 3-candle pattern (close[2] still on other side)
+    const bosUp = lastPh != null && c.c > lastPh && older.c <= lastPh;
+    const bosDn = lastPl != null && c.c < lastPl && older.c >= lastPl;
+
+    // Pine Structure SL = min(low[1], low[2]) / max(high[1], high[2])
+    out.structSlLong = r2(Math.min(prev.l, older.l));
+    out.structSlShort = r2(Math.max(prev.h, older.h));
+
+    const buyZone = bullishFvg && strongPrev && bosUp;
+    const sellZone = bearishFvg && strongPrev && bosDn;
     const finalBuy = buyZone && lastSignal !== 1;
     const finalSell = sellZone && lastSignal !== -1;
     if (finalBuy) lastSignal = 1;
@@ -274,14 +306,21 @@ function simulateDay({ day, dayCandles, nifty, rule, qty, lastMin, isToday, trad
 
     const entryPremium = r2(px.price + rule.slippage);
     const entrySpot = r2(nifty.get(px.min)?.o ?? spot);
-    const stopSpot = pe ? r2(sc.h) : r2(sc.l);
+    // Pine Structure SL: min(low[1], low[2]) / max(high[1], high[2]) ± ATR buffer
+    const buf = sc.atr != null ? rule.slBufAtr * sc.atr : 0;
+    const rawSl = pe ? sc.structSlShort : sc.structSlLong;
+    if (rawSl == null) return skip('missing structure SL levels');
+    const stopSpot = pe ? r2(rawSl + buf) : r2(rawSl - buf);
     const riskPts = pe ? r2(stopSpot - entrySpot) : r2(entrySpot - stopSpot);
     if (riskPts <= 0) {
       return skip(
         pe
-          ? `NIFTY ${fmt(entrySpot)} already at/above signal high ${fmt(stopSpot)}`
-          : `NIFTY ${fmt(entrySpot)} already at/below signal low ${fmt(stopSpot)}`,
+          ? `NIFTY ${fmt(entrySpot)} already at/above structure SL ${fmt(stopSpot)}`
+          : `NIFTY ${fmt(entrySpot)} already at/below structure SL ${fmt(stopSpot)}`,
       );
+    }
+    if (sc.atr != null && riskPts > rule.maxRiskAtr * sc.atr) {
+      return skip(`risk ${riskPts} pts > max ${rule.maxRiskAtr}×ATR (${r2(rule.maxRiskAtr * sc.atr)})`);
     }
     const targetSpot = pe ? r2(entrySpot - riskPts * rr) : r2(entrySpot + riskPts * rr);
     const bos = pe ? sc.lastPl : sc.lastPh;
@@ -309,16 +348,16 @@ function simulateDay({ day, dayCandles, nifty, rule, qty, lastMin, isToday, trad
         {
           time: hhmm(sc.end + 1),
           text: pe
-            ? `SELL zone on ${span(sc)}: bearish FVG + strong body on prior bar + close ${fmt(sc.c)} below last swing low ${fmt(bos)}`
-            : `BUY zone on ${span(sc)}: bullish FVG + strong body on prior bar + close ${fmt(sc.c)} above last swing high ${fmt(bos)}`,
+            ? `SELL zone on ${span(sc)}: bearish FVG + strong body on prior bar + BOS inside pattern (close ${fmt(sc.c)} < swing L ${fmt(bos)}, candle[2] still ≥)`
+            : `BUY zone on ${span(sc)}: bullish FVG + strong body on prior bar + BOS inside pattern (close ${fmt(sc.c)} > swing H ${fmt(bos)}, candle[2] still ≤)`,
         },
         {
           time: hhmm(sc.end + 1),
-          text: `NIFTY ${tfLabel} ${span(sc)} O ${fmt(sc.o)} H ${fmt(sc.h)} L ${fmt(sc.l)} C ${fmt(sc.c)} · size ${candlePts} pts · swing H ${fmt(sc.lastPh)} / L ${fmt(sc.lastPl)}`,
+          text: `NIFTY ${tfLabel} ${span(sc)} O ${fmt(sc.o)} H ${fmt(sc.h)} L ${fmt(sc.l)} C ${fmt(sc.c)} · size ${candlePts} pts · swing H ${fmt(sc.lastPh)} / L ${fmt(sc.lastPl)} · ATR ${sc.atr != null ? fmt(sc.atr) : '—'}`,
         },
         {
           time: hhmm(px.min),
-          text: `Bought ${strike} ${side} at ₹${fmt(entryPremium)} · NIFTY ${fmt(entrySpot)} · SL ${fmt(stopSpot)} (${tfLabel} close only) · NIFTY target ${fmt(targetSpot)} (${rr}R) · overnight hold OK · no day close`,
+          text: `Bought ${strike} ${side} at ₹${fmt(entryPremium)} · NIFTY ${fmt(entrySpot)} · Structure SL ${fmt(stopSpot)} (raw ${fmt(rawSl)} ± ${rule.slBufAtr}×ATR · ${tfLabel} close only) · NIFTY target ${fmt(targetSpot)} (${rr}R) · overnight hold OK · no day close`,
         },
       ],
     };
@@ -441,9 +480,29 @@ function simulateDay({ day, dayCandles, nifty, rule, qty, lastMin, isToday, trad
     if (b) markPath(pos, m, b);
 
     const nBar = nifty.get(m);
+    const pe = pos.side === 'PE';
+
+    // Pine conservative: if SL and target conflict on the same bar, SL wins first
+    const closed = candleCloseAt.get(m);
+    if (closed && !(pos.entryDate === day.dateKey && closed.start === pos.sc.start)) {
+      const slClose = pe ? closed.c >= pos.stopSpot : closed.c <= pos.stopSpot;
+      if (slClose) {
+        const fill = priceAt(pos.book, m, 0) || (b ? { min: m, price: b.o } : null) || priceAt(pos.book, m, 3);
+        close(
+          pos,
+          fill,
+          m,
+          'SL',
+          `NIFTY ${tfLabel} ${span(closed)} closed at ${fmt(closed.c)} ${pe ? '≥' : '≤'} Structure SL ${fmt(pos.stopSpot)} (wick alone does not cut · SL before target)`,
+          r2(closed.c),
+        );
+        pos = null;
+        continue;
+      }
+    }
+
     // Fixed NIFTY R-target — 1-min touch
     if (nBar && pos.targetSpot != null) {
-      const pe = pos.side === 'PE';
       const hit = pe ? nBar.l <= pos.targetSpot : nBar.h >= pos.targetSpot;
       if (hit) {
         const fill = priceAt(pos.book, m, 0) || (b ? { min: m, price: b.o } : null) || priceAt(pos.book, m, 3);
@@ -454,26 +513,6 @@ function simulateDay({ day, dayCandles, nifty, rule, qty, lastMin, isToday, trad
           'TARGET',
           `NIFTY touched target ${fmt(pos.targetSpot)} (${rr}R) at ${hhmm(m)} (spot H ${fmt(nBar.h)} / L ${fmt(nBar.l)})`,
           pe ? Math.min(nBar.l, pos.targetSpot) : Math.max(nBar.h, pos.targetSpot),
-        );
-        pos = null;
-        continue;
-      }
-    }
-
-    // NIFTY SL — only when a *completed* TF candle closes through the stop (not wick touch)
-    const closed = candleCloseAt.get(m);
-    if (closed && !(pos.entryDate === day.dateKey && closed.start === pos.sc.start)) {
-      const pe = pos.side === 'PE';
-      const slClose = pe ? closed.c >= pos.stopSpot : closed.c <= pos.stopSpot;
-      if (slClose) {
-        const fill = priceAt(pos.book, m, 0) || (b ? { min: m, price: b.o } : null) || priceAt(pos.book, m, 3);
-        close(
-          pos,
-          fill,
-          m,
-          'SL',
-          `NIFTY ${tfLabel} ${span(closed)} closed at ${fmt(closed.c)} ${pe ? '≥' : '≤'} SL ${fmt(pos.stopSpot)} (wick alone does not cut)`,
-          r2(closed.c),
         );
         pos = null;
       }
@@ -495,14 +534,23 @@ async function runBacktest({ from, to, lots = 10, rule: ruleIn = {}, onProgress,
   const timeframe = Number(ruleIn.timeframe) === 5 ? 5 : 15;
   const rr = Math.min(10, Math.max(0.5, Number(ruleIn.rr) || DEFAULT_RULE.rr));
   const maxHoldDays = Math.min(20, Math.max(1, Math.round(Number(ruleIn.maxHoldDays) || DEFAULT_RULE.maxHoldDays)));
+  const fvgMinAtr = Math.min(1, Math.max(0, Number(ruleIn.fvgMinAtr) || DEFAULT_RULE.fvgMinAtr));
+  const atrLen = Math.min(50, Math.max(5, Math.round(Number(ruleIn.atrLen) || DEFAULT_RULE.atrLen)));
+  const slBufAtr = Math.min(1, Math.max(0, Number(ruleIn.slBufAtr) || DEFAULT_RULE.slBufAtr));
+  const maxRiskAtr = Math.min(10, Math.max(0.5, Number(ruleIn.maxRiskAtr) || DEFAULT_RULE.maxRiskAtr));
   const rule = {
     ...DEFAULT_RULE,
     ...ruleIn,
     timeframe,
     rr,
     maxHoldDays,
+    fvgMinAtr,
+    atrLen,
+    slBufAtr,
+    maxRiskAtr,
     targetMode: 'niftyRr',
-    entryFrom: Number.isFinite(ruleIn.entryFrom) ? ruleIn.entryFrom : OPEN + timeframe,
+    // Default entry window ~09:20–15:00 (Pine session); allow override
+    entryFrom: Number.isFinite(ruleIn.entryFrom) ? ruleIn.entryFrom : OPEN + 5,
   };
   const lotCount = Math.max(1, Math.round(lots));
   const qty = lotCount * rule.lotSize;

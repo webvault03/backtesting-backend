@@ -139,6 +139,10 @@ const hpEntryZoneHandlers = jobHandlers(
         leftBars: Math.round(numberIn(body.leftBars, 1, 20, d.leftBars)),
         rightBars: Math.round(numberIn(body.rightBars, 1, 20, d.rightBars)),
         bodyRatio: numberIn(body.bodyRatio, 0.3, 0.95, d.bodyRatio),
+        fvgMinAtr: numberIn(body.fvgMinAtr, 0, 1, d.fvgMinAtr),
+        atrLen: Math.round(numberIn(body.atrLen, 5, 50, d.atrLen)),
+        slBufAtr: numberIn(body.slBufAtr, 0, 1, d.slBufAtr),
+        maxRiskAtr: numberIn(body.maxRiskAtr, 0.5, 10, d.maxRiskAtr),
         maxCandlePts: numberIn(body.maxCandlePts, 1, 300, d.maxCandlePts),
         /** Guide: fixed NIFTY R-target only (default 2R). No option-% / trail. */
         targetMode: 'niftyRr',
