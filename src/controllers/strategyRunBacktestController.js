@@ -3,7 +3,6 @@ const shortStraddle = require('../services/shortStraddleBacktest/engine');
 const gappingPlay = require('../services/gappingPlayBacktest/engine');
 const cvdOi = require('../services/cvdOiBacktest/engine');
 const openOiWalls = require('../services/openOiWallsBacktest/engine');
-const haEma9 = require('../services/haEma9Backtest/engine');
 const hpEntryZone = require('../services/hpEntryZoneBacktest/engine');
 const { parseDateRange, numberIn, parseLots, jobHandlers } = require('./backtestRequest');
 
@@ -125,25 +124,6 @@ const openOiWallsHandlers = jobHandlers(
   openOiWalls.runBacktest,
 );
 
-const haEma9Handlers = jobHandlers(
-  'ha-ema9',
-  (body) => {
-    const range = parseDateRange(body, { historyStart: '2020-01-01' });
-    if (range.to < haEma9.HISTORY_START) throw new Error(`Option history starts ${haEma9.HISTORY_START}`);
-    return {
-      from: range.from < haEma9.HISTORY_START ? haEma9.HISTORY_START : range.from,
-      to: range.to,
-      lots: parseLots(body.lots),
-      rule: {
-        maxCandlePts: numberIn(body.maxCandlePts, 1, 200, haEma9.DEFAULT_RULE.maxCandlePts),
-        rr: numberIn(body.rr, 0.25, 10, haEma9.DEFAULT_RULE.rr),
-        slippage: numberIn(body.slippage, 0, 5, haEma9.DEFAULT_RULE.slippage),
-      },
-    };
-  },
-  haEma9.runBacktest,
-);
-
 const hpEntryZoneHandlers = jobHandlers(
   'hp-entry-zone',
   (body) => {
@@ -173,8 +153,6 @@ const hpEntryZoneHandlers = jobHandlers(
 module.exports = {
   postHpEntryZoneBacktestRun: hpEntryZoneHandlers.run,
   getHpEntryZoneBacktestJob: hpEntryZoneHandlers.status,
-  postHaEma9BacktestRun: haEma9Handlers.run,
-  getHaEma9BacktestJob: haEma9Handlers.status,
   postOpenOiWallsBacktestRun: openOiWallsHandlers.run,
   getOpenOiWallsBacktestJob: openOiWallsHandlers.status,
   postGappingPlayBacktestRun: gappingPlayHandlers.run,

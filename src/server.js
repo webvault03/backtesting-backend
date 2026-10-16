@@ -11,7 +11,6 @@ const { initRealtime } = require('./services/realtimeSocket');
 const strategySixPaperEngine = require('./services/liveShortStraddleEngineStrategy6');
 const strategySixteenPaperEngine = require('./services/liveOpenOiWallsEngine');
 const strategySeventeenPaperEngine = require('./services/liveOiCandleAgreeEngine');
-const strategyEighteenPaperEngine = require('./services/liveOiStrikeFlowEngine');
 
 async function bootBackgroundServices() {
   try {
@@ -19,7 +18,6 @@ async function bootBackgroundServices() {
     await s6.reconcileOpenTrades();
     await require('./services/liveOpenOiWallsEngine').reconcileOpenTrades();
     await require('./services/liveOiCandleAgreeEngine').reconcileOpenTrades();
-    await require('./services/liveOiStrikeFlowEngine').reconcileOpenTrades();
   } catch (err) {
     console.warn('Paper-live open-trade reconcile:', err.message);
   }
@@ -104,25 +102,9 @@ async function bootBackgroundServices() {
   }
 
   try {
-    const boot = await strategyEighteenPaperEngine.ensureEngineRunning();
-    if (boot.ok) {
-      console.log('OI Strike Flow paper-live started (strategy-18)');
-    } else {
-      console.warn('OI Strike Flow paper-live boot:', boot.error || 'unknown');
-    }
-  } catch (err) {
-    console.warn('OI Strike Flow paper-live boot failed:', err.message);
-  }
-
-  try {
     const { notifyDhanConnectivityRestored } = require('./services/livePaperEngineRecovery');
     const resume = await notifyDhanConnectivityRestored();
-    if (
-      resume.strategy6?.resumed
-      || resume.strategy16?.resumed
-      || resume.strategy17?.resumed
-      || resume.strategy18?.resumed
-    ) {
+    if (resume.strategy6?.resumed || resume.strategy16?.resumed || resume.strategy17?.resumed) {
       console.log('Paper-live resumed open positions from MongoDB after boot', resume);
     }
   } catch (err) {

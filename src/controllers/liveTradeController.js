@@ -5,20 +5,17 @@ const Strategy16OpenWallDay = require('../models/strategy16OpenWallDay');
 const strategySixEngine = require('../services/liveShortStraddleEngineStrategy6');
 const strategySixteenEngine = require('../services/liveOpenOiWallsEngine');
 const strategySeventeenEngine = require('../services/liveOiCandleAgreeEngine');
-const strategyEighteenEngine = require('../services/liveOiStrikeFlowEngine');
 const {
   STRATEGY_SIX_KEY,
   STRATEGY_SIX_SHORT_STRADDLE_LIVE_KEY,
   STRATEGY_SIXTEEN_OPEN_OI_WALLS_LIVE_KEY,
   STRATEGY_SEVENTEEN_OI_CANDLE_AGREE_LIVE_KEY,
-  STRATEGY_EIGHTEEN_OI_STRIKE_FLOW_LIVE_KEY,
 } = require('../strategies/keys');
 
 const KNOWN_PAPER_LIVE_KEYS = [
   STRATEGY_SIX_SHORT_STRADDLE_LIVE_KEY,
   STRATEGY_SIXTEEN_OPEN_OI_WALLS_LIVE_KEY,
   STRATEGY_SEVENTEEN_OI_CANDLE_AGREE_LIVE_KEY,
-  STRATEGY_EIGHTEEN_OI_STRIKE_FLOW_LIVE_KEY,
 ];
 
 function buildPaperLiveKeyFilter(ctx) {
@@ -245,7 +242,6 @@ const LIVE_STRATEGIES = {
   'strategy-6': straddlePaperLiveCtx('strategy-6', strategySixEngine),
   'strategy-16': oiPaperLiveCtx('strategy-16', strategySixteenEngine),
   'strategy-17': oiPaperLiveCtx('strategy-17', strategySeventeenEngine),
-  'strategy-18': oiPaperLiveCtx('strategy-18', strategyEighteenEngine),
 };
 
 function getLiveContext(req) {
@@ -354,9 +350,7 @@ async function getStatus(req, res) {
             ? 'Open OI Walls'
             : ctx.strategyId === 'strategy-17'
               ? 'OI + Candle Agree'
-              : ctx.strategyId === 'strategy-18'
-                ? 'OI Strike Flow'
-                : 'Paper-live',
+              : 'Paper-live',
     });
     return res.json({
       ok: true,
